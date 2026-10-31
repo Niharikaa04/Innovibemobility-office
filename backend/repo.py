@@ -1,4 +1,5 @@
-"""Read-only user lookup. Uses existing users and employees tables."""
+"""Read-only user lookup using existing users and employees tables."""
+
 from dataclasses import dataclass
 from typing import Optional, Protocol
 
@@ -22,64 +23,62 @@ class PostgresUserRepo:
         self.dsn = dsn
         self.cfg = cfg
 
-    def find(self, ident):
-        return self._q(ident, False)
+    def find(self, ident: str) -> Optional[UserRecord]:
+        return self._q(ident, by_id=False)
 
-    def find_by_id(self, uid):
-        return self._q(uid, True)
+    def find_by_id(self, uid: str) -> Optional[UserRecord]:
+        return self._q(uid, by_id=True)
 
-    def _q(self, ident, by_id):
+    def _q(self, ident: str, by_id: bool) -> Optional[UserRecord]:
         import psycopg
         from psycopg import sql
 
         c = self.cfg
 
-        # Safely construct the configured users table identifier.
         users_table = sql.Identifier(*c["table"].split("."))
         employees_table = sql.Identifier("office_dashboard", "employees")
 
-        # Fetch the employee's real name through employee_id.
-        cols = [
+        columns = [
             sql.SQL("u.{}").format(sql.Identifier(c["id"])),
-            sql.SQL("COALESCE(e.full_name::text, u.{}::text)").format(
-                sql.Identifier(c["login"])
-            ),
+            sql.SQL("COALESCE(e.full_name::text, u.username::text)"),
             sql.SQL("u.{}").format(sql.Identifier(c["password"])),
             sql.SQL("u.{}").format(sql.Identifier(c["role"])),
         ]
 
-        if c["active"]:
-            cols.append(sql.SQL("u.{}").format(sql.Identifier(c["active"])))
+        if c.get("active"):
+            columns.append(
+                sql.SQL("u.{}").format(sql.Identifier(c["active"]))
+            )
 
         if by_id:
-            where = [
+            conditions = [
                 sql.SQL("u.{}::text = %s").format(
                     sql.Identifier(c["id"])
                 )
             ]
         else:
-            where = [
-                sql.SQL("lower(u.{}::text) = %s").format(
+            conditions = [
+                sql.SQL("lower(u.{}::text) = lower(%s)").format(
                     sql.Identifier(c["login"])
                 )
             ]
 
-            # Only enable email lookup if the configured users table
-            # actually contains the configured email column.
             if c.get("email"):
-                where.append(
-                    sql.SQL("lower(u.{}::text) = %s").format(
+                conditions.append(
+                    sql.SQL("lower(u.{}::text) = lower(%s)").format(
                         sql.Identifier(c["email"])
                     )
                 )
 
         query = (
-            sql.SQL("SELECT {} FROM {} AS u ")
-            .format(sql.SQL(", ").join(cols), users_table)
+            sql.SQL("SELECT {} FROM {} AS u ").format(
+                sql.SQL(", ").join(columns),
+                users_table,
+            )
             + sql.SQL(
                 "LEFT JOIN {} AS e ON u.employee_id = e.id WHERE ("
             ).format(employees_table)
-            + sql.SQL(" OR ").join(where)
+            + sql.SQL(" OR ").join(conditions)
             + sql.SQL(")")
         )
 
@@ -88,25 +87,24 @@ class PostgresUserRepo:
         ) as conn:
             conn.read_only = True
             rows = conn.execute(
-                query, (ident,) * len(where)
+                query, (ident,) * len(conditions)
             ).fetchall()
 
-        # Refuse ambiguous matches rather than selecting an arbitrary user.
         if len(rows) != 1:
             return None
 
-        r = rows[0]
+        row = rows[0]
 
         active = (
             True
-            if not c["active"]
-            else str(r[4]).strip().lower() in c["active_values"]
+            if not c.get("active")
+            else str(row[4]).strip().lower() in c["active_values"]
         )
 
         return UserRecord(
-            id=str(r[0]),
-            name=str(r[1] or ""),
-            pw_hash=str(r[2] or ""),
-            role_raw=str(r[3] or ""),
+            id=str(row[0]),
+            name=str(row[1] or ""),
+            pw_hash=str(row[2] or ""),
+            role_raw=str(row[3] or ""),
             active=active,
         )
