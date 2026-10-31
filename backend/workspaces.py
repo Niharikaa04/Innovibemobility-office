@@ -59,10 +59,16 @@ def build_router(dsn, session, csrf, audit):
         def dep(s=Depends(csrf if write else session)):
             ns=MODULES.get(module)
             if not ns or not permissions.can(s['role'], f'{ns}.{action}'):
-                audit.write('workspace_permission_denied',s['id'],None,module=module,action=action)
+                audit.write('workspace_permission_denied',s['id'],None,module=module,attempted=action)
                 raise HTTPException(403,'You do not have permission to access this module.')
             return s
         return dep
+    def write_gate(module:str, s=Depends(csrf)):
+        """Runs BEFORE the request body is validated, so a role without write access gets 403 (never a 422 that reveals the schema)."""
+        if module not in MODULES: raise HTTPException(404,'Unknown module.')
+        if not permissions.can(s['role'],f'{MODULES[module]}.write'):
+            audit.write('workspace_permission_denied',s['id'],None,module=module,attempted='write'); raise HTTPException(403,'You do not have permission to change records.')
+        return s
     @r.get('/{module}')
     def list_records(module:str, q:str='', status:str='', date_from:date|None=None, date_to:date|None=None, page:int=Query(1,ge=1), limit:int=Query(25,ge=1,le=100), s=Depends(session)):
         if module not in MODULES: raise HTTPException(404,'Unknown module.')
@@ -111,7 +117,7 @@ def build_router(dsn, session, csrf, audit):
 
     @r.post('/{module}/records')
     @dupe_409
-    def create_record(module:str, body:RecordIn, s=Depends(csrf)):
+    def create_record(module:str, body:RecordIn, s=Depends(write_gate)):
         if module not in MODULES: raise HTTPException(404,'Unknown module.')
         if not permissions.can(s['role'],f'{MODULES[module]}.write'): raise HTTPException(403,'You do not have permission to change records.')
         with db() as c:
@@ -122,7 +128,7 @@ def build_router(dsn, session, csrf, audit):
         return row
     @r.patch('/{module}/records/{record_id}')
     @dupe_409
-    def update_record(module:str,record_id:str,body:RecordIn,s=Depends(csrf)):
+    def update_record(module:str,record_id:str,body:RecordIn,s=Depends(write_gate)):
         if module not in MODULES: raise HTTPException(404,'Unknown module.')
         if not permissions.can(s['role'],f'{MODULES[module]}.write'): raise HTTPException(403,'You do not have permission to change records.')
         with db() as c:

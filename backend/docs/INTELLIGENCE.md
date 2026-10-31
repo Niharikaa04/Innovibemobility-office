@@ -79,7 +79,7 @@ A previous-period `comparison` block has its **own** state, so a current value c
 
 `reliability`: `system_recorded` (written by the system), `user_entered` (typed in by people: due dates, lead values, budgets), `derived`, `statistical` (screening method, not a company rule). There is **no numeric confidence score**: none can be justified from the data, so the labels above plus `state`, `limitations` and `freshness` are the confidence methodology.
 
-## 4. Endpoints (all `GET`, all require a valid session; `Cache-Control: no-store`)
+## 4. Endpoints (all require a valid session; `Cache-Control: no-store`; the only `POST` is `/ask`, which also requires CSRF)
 
 Gate: `EXECUTIVE_ROLES = ("ceo","coo","cto")` in `intelligence/api.py` (proposed default, change the tuple to change it). Other roles get **403** and a `permission_denied` audit entry before any database connection is opened. Per-metric permissions then apply again; the rest returns `no_permission`.
 
@@ -117,7 +117,7 @@ Latest reading (within 24 h) per device+metric vs up to 100 earlier readings (30
 
 ## 7. Security model
 
-* Existing session cookie, revocation, per-request role re-check; role comes only from the verified session. GET-only API, so CSRF does not apply; a future POST (Ask AI) must use the `csrf` dependency already passed to `build_router`.
+* Existing session cookie, revocation, per-request role re-check; role comes only from the verified session. The only POST (`/ask`) uses the `csrf` dependency already passed to `build_router`.
 * Server-side gates on every endpoint and metric (`registry.permitted`, one function shared by the gate, catalogue and AI tool list, tested for all 7 roles). Own-records-only roles never receive company-wide aggregates.
 * Read-only: every query is a `SELECT` in a read-only transaction with a 5 s timeout and a 5000-row cap; a test scans the package for write SQL.
 * Cache and rate limiter are in-process; cache keys contain user id **and** role, period and metric. TTL 30 s.
@@ -177,3 +177,41 @@ The new tests are plain functions (no fixtures) importing `tests/intel_fixtures.
 Added: `backend/intelligence/` (11 modules), `backend/docs/INTELLIGENCE.md`, `backend/tests/intel_fixtures.py`, `backend/tests/test_intel_analytics.py`, `backend/tests/test_intel_metrics.py`, `backend/tests/test_intel_security.py`.
 Changed: `backend/main.py`, 2 lines (`import intelligence.api as intelligence_api`; `app.include_router(intelligence_api.build_router(dsn, session, csrf, audit))`), CRLF line endings preserved.
 Not added: migrations, dependencies, permissions, environment variables.
+
+## 13. Stage 3/4 addendum: Ask your business, hardening
+
+**`POST /api/intelligence/ask`** body `{question, period}` (unknown fields rejected; question 1-300 chars after trimming; period one of `wow|mom|last_7d|last_30d`).
+Order of checks: session + CSRF -> executive role + rate limit -> input validation -> resolve -> only then the database.
+
+* Answers are produced on the server by `intelligence/ask.py` from the same registry as the cards, with the caller's own role. The browser no longer fetches or combines metrics.
+* The question text is data: it selects one entry of a fixed catalogue (14 questions). It is never executed, interpolated into SQL, sent to a model, logged, cached or echoed. The audit log records only the catalogue id (`question_id`) and `status`.
+* Unsupported (profit, churn, forecasts, employee ranking, cash) and sensitive/hostile questions (salaries, credentials, contact details, individual location, instruction override, SQL) get a `limitation` answer and read no data.
+* Each answer has `sources[]` with state, period, freshness, reliability and `evidence[]` (source, method, row count). A metric that is missing, unavailable or not permitted for the role is an `unavailable` statement, never 0.
+* No AI provider is called. `AI_PROVIDER` in the environment does NOT enable anything (no provider implementation exists); `/status` reports `degraded_mode` and `data_shared_with_provider: false`. Enabling a provider needs explicit approval of the provider and of exactly which fields may be shared, and must go through `ai_interface.redact_for_ai`.
+* Database outage -> one safe `503`; missing `DATABASE_URL` -> `503` ("not configured") on database routes and `not_configured: ["crm"]` on the CEO dashboard. All `/api/` responses carry `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. Unhandled errors log only the exception class and route.
+* Cache keys include user id and role; entries are deep-copied on read and write.
+
+Tests: `tests/test_intel_ask.py` (service, security and HTTP integration), `tests/test_stage4_hardening.py` (route allow-list, CSRF on every write, no-database behaviour), `tests/test_intel_pg_parity.py` (every metric on real PostgreSQL equals the SQLite result; needs `pgserver`, uses an inferred schema, not production DDL). Suites that build a database from `<project>/db/*.sql` skip with an explicit reason when that folder is absent.
+
+Frontend: `intelligence/Ask.tsx` calls `intel.ask` (CSRF header, abort on unmount), shows evidence under "How this was obtained", maps 401/403/422/429/503/network errors to fixed safe messages, and offers "Try again" only for transient failures.
+
+### 13.1 Follow-up: RBAC audit, ordering fixes, performance
+
+* **RBAC matrix test** (`tests/test_rbac_matrix.py`, 67 tests): logs in as all 7 roles and calls every `/api` route (the database is unreachable on purpose, so 403 = blocked at the gate, anything else = reached the handler). Invariants: a role with no grant on a module is denied on every route of it; a read/export-only role is denied every state-changing route unless it holds approve/archive/admin; all 60 `/api/workspaces/{module}` slugs are checked per role. No permission violation was found in the audited modules. This verifies the permission GATE only. Row-level scoping (own records, assigned tickets) is exercised by the PostgreSQL suites that need `db/`, which could not run here.
+* **Authorization before validation:** `/api/intelligence/ask` and workspace create/update used to validate the body first, so a role without access got `422` (schema hints) instead of `403`. Both now gate first.
+* **Latent bug fixed:** `workspaces.py` passed `action=` as an audit field; `AuditSink.write(action, ...)` already has that parameter, so a denied workspace write crashed with `TypeError` (500) instead of returning 403.
+* **Database outage anywhere in the API** (`psycopg.OperationalError`) is now one generic `503`, not a `500`; the driver message is never returned or logged.
+* **Performance:** the metric memo is shared between endpoints for the same user + role + period + day (TTL = endpoint cache TTL). Measured on PostgreSQL: overview 110 queries, then alerts/insights/trends/Ask 0 extra queries (previously 110/54/48/110). Failed (unavailable) metrics are dropped from the memo so a transient error is retried, not replayed. Covered by `tests/test_intel_perf.py`, including user/role/period isolation and TTL expiry. Frontend: the AI Insights panel is code-split with `React.lazy` (about 28 kB out of the main bundle; the main chunk is still about 1.17 MB because other pages share the charting library).
+
+### 13.2 Verified against the real migrations (db/*.sql)
+
+With the project's `db/` folder present (at `<project>/db`, next to `backend/`), the PostgreSQL suites run against a disposable database built from those migrations: 405 backend tests pass; 17 skip because `013_ops_followup.sql` is not in the supplied `db/` folder (`test_ops2_pg.py`, which says so in its skip reason).
+* `tests/test_intel_real_schema.py`: all 33 metrics run on the real migrated schema with no query errors; on an empty database they report no_data / not_configured / no_threshold, and the only numeric value is `approvals.pending = 0`, whose source tables exist and hold no pending rows.
+* Row-level rules (own attendance/leave/tasks, CRM, ops) are exercised by the existing PostgreSQL suites, which now run.
+* Test fixes (tests only, no product code): `test_crm` fixture now applies 013/014 (columns `crm.py` writes) and not 004 (which removes the legacy `qualified` stage a test relies on); its activity-count test now expects stage-history entries; `test_ops_pg` applies 012 (adds `service_tickets.service_center_id`).
+* File-name note: the 012 forward migration is saved as `012_garages _&_ service_centers.sql` while its rollback is `012_garages_technicians_diagnostics_iot.rollback.sql`. `tests/conftest.py::migration_path` accepts either name. Consider renaming the file so the pair matches.
+
+### 13.3 Windows case-insensitivity fix (frontend)
+
+`frontend/src/intelligence/ask.ts` (types + suggestions) sat next to `Ask.tsx` (the component). On Windows/macOS file names ignore letter case, so `import Ask from './Ask'` resolved to `ask.ts`, which has no default export: the AI Insights tab crashed ("does not provide an export named 'default'") and blanked the page. The types file is now `askTypes.ts`. `sourceNames.test.ts` fails if two source files ever share a name ignoring case and extension, and AI Insights is wrapped in an `ErrorBoundary` so a failure in one panel shows a message instead of blanking the dashboard.
+

@@ -39,4 +39,4 @@ export interface Context {
   history: { module: string; oldest_record_at: string | null; history_days: number | null; supports_previous_period_comparison: boolean }[]
   notes: string[]; generated_at: string; cached: boolean
 }
-export interface Status { roles: string[]; role: string; ai: { ai_available: boolean; provider: string; degraded_mode: boolean; message: string; data_shared_with_provider: boolean }; metrics: number; periods: string[]; max_range_days: number }
+export interface Status { roles: string[]; role: string; ai: { ai_available: boolean; provider: string; degraded_mode: boolean; message: string; data_shared_with_provider: boolean }; metrics: number; periods: string[]; max_range_days: number; ask?: { max_question_chars: number; suggestions: string[]; answered_by: string } }

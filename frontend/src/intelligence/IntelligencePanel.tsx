@@ -4,7 +4,7 @@ import { IntelError, intel } from './client'
 import type { Context, MetricResult, Overview, PeriodKind, Status, Trends } from './types'
 import { PERIODS, fmtTime } from './format'
 import { AlertRow, Coverage, FlowRow, InsightCardView, MetricCard, Sev, TrendChart } from './parts'
-import Ask from './AskPanel'
+import Ask from './Ask'
 
 type Load<T> = { s: 'loading' } | { s: 'ok'; d: T } | { s: 'err'; status: number; msg: string }
 const fail = (e: unknown): { s: 'err'; status: number; msg: string } => e instanceof IntelError ? { s: 'err', status: e.status, msg: e.message } : { s: 'err', status: 0, msg: 'Something went wrong while loading business intelligence.' }
@@ -40,15 +40,6 @@ export default function IntelligencePanel() {
     intel.context(period, ac.signal).then(d => setCtx({ s: 'ok', d }), e => { if (e.name !== 'AbortError') setCtx(fail(e)) })
     return () => ac.abort()
   }, [covOpen, period, tick])
-
-  /* metric fetches for Ask are memoised per period+refresh so a follow-up never recalculates a number it already holds */
-  const cache = useRef(new Map<string, Promise<MetricResult>>())
-  useEffect(() => { cache.current.clear() }, [period, tick])
-  const metric = useCallback((id: string, p: PeriodKind) => {
-    const k = id + '|' + p; let v = cache.current.get(k)
-    if (!v) { v = intel.metric(id, p); cache.current.set(k, v); v.catch(() => cache.current.delete(k)) }
-    return v
-  }, [])
 
   const overview = ov.s === 'ok' ? ov.d : null
   const sum = overview?.summary
@@ -89,7 +80,7 @@ export default function IntelligencePanel() {
           <div className="iv-cards">{overview.cards.map(c => <MetricCard key={c.metric_id} c={c} />)}</div>
         </section>
 
-        <Ask overview={overview} period={period} metric={metric} aiMessage={aiMsg} />
+        <Ask period={period} aiMessage={aiMsg} suggested={status?.ask?.suggestions} />
 
         {/* ---------- risks ---------- */}
         <section className="ch-card iv-section" aria-labelledby="iv-risk-h">

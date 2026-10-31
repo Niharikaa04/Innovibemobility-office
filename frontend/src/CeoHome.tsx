@@ -2,7 +2,10 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { NAV, slug, TABMAP, KPI_SOURCE, NEEDS_MONITORING } from './nav';
 import { Chart } from './Charts';
-import IntelligencePanel from './intelligence/IntelligencePanel';
+import { lazy, Suspense } from 'react';
+import { Loading } from './opsui';
+import ErrorBoundary from './intelligence/ErrorBoundary';
+const IntelligencePanel = lazy(() => import('./intelligence/IntelligencePanel'));     // code-split: loaded only when the AI Insights tab is opened
 import './ceo-home.css';
 
 /* Put these in frontend/public/assets/. A missing file is hidden, not shown broken. */
@@ -210,7 +213,7 @@ export default function CeoHome({
           <button className="primary" onClick={onDownload}>Download CSV</button>
         </section>
       ) : t === 'AI Insights' ? (
-        <IntelligencePanel />
+        <ErrorBoundary label="AI Insights"><Suspense fallback={<Loading />}><IntelligencePanel /></Suspense></ErrorBoundary>
       ) : (
         <div className="panel-row n3 r0">
           {((TABMAP as any)['ceo']?.[t] || []).map((k: string) => all.find((p: any) => p.k === k)).filter(Boolean).map(card)}

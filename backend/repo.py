@@ -1,110 +1,30 @@
-"""Read-only user lookup using existing users and employees tables."""
-
+"""Read-only user lookup. Issues SELECT only, inside a read-only transaction. Never writes to existing tables."""
 from dataclasses import dataclass
 from typing import Optional, Protocol
 
-
 @dataclass
 class UserRecord:
-    id: str
-    name: str
-    pw_hash: str
-    role_raw: str
-    active: bool
-
+    id: str; name: str; pw_hash: str; role_raw: str; active: bool
 
 class UserRepo(Protocol):
     def find(self, ident: str) -> Optional[UserRecord]: ...
     def find_by_id(self, uid: str) -> Optional[UserRecord]: ...
 
-
 class PostgresUserRepo:
-    def __init__(self, dsn: str, cfg: dict):
-        self.dsn = dsn
-        self.cfg = cfg
-
-    def find(self, ident: str) -> Optional[UserRecord]:
-        return self._q(ident, by_id=False)
-
-    def find_by_id(self, uid: str) -> Optional[UserRecord]:
-        return self._q(uid, by_id=True)
-
-    def _q(self, ident: str, by_id: bool) -> Optional[UserRecord]:
-        import psycopg
-        from psycopg import sql
-
-        c = self.cfg
-
-        users_table = sql.Identifier(*c["table"].split("."))
-        employees_table = sql.Identifier("office_dashboard", "employees")
-
-        columns = [
-            sql.SQL("u.{}").format(sql.Identifier(c["id"])),
-            sql.SQL("COALESCE(e.full_name::text, u.username::text)"),
-            sql.SQL("u.{}").format(sql.Identifier(c["password"])),
-            sql.SQL("u.{}").format(sql.Identifier(c["role"])),
-        ]
-
-        if c.get("active"):
-            columns.append(
-                sql.SQL("u.{}").format(sql.Identifier(c["active"]))
-            )
-
-        if by_id:
-            conditions = [
-                sql.SQL("u.{}::text = %s").format(
-                    sql.Identifier(c["id"])
-                )
-            ]
-        else:
-            conditions = [
-                sql.SQL("lower(u.{}::text) = lower(%s)").format(
-                    sql.Identifier(c["login"])
-                )
-            ]
-
-            if c.get("email"):
-                conditions.append(
-                    sql.SQL("lower(u.{}::text) = lower(%s)").format(
-                        sql.Identifier(c["email"])
-                    )
-                )
-
-        query = (
-            sql.SQL("SELECT {} FROM {} AS u ").format(
-                sql.SQL(", ").join(columns),
-                users_table,
-            )
-            + sql.SQL(
-                "LEFT JOIN {} AS e ON u.employee_id = e.id WHERE ("
-            ).format(employees_table)
-            + sql.SQL(" OR ").join(conditions)
-            + sql.SQL(")")
-        )
-
-        with psycopg.connect(
-            self.dsn, prepare_threshold=None
-        ) as conn:
+    def __init__(self, dsn: str, cfg: dict): self.dsn, self.cfg = dsn, cfg
+    def find(self, ident): return self._q(ident, False)
+    def find_by_id(self, uid): return self._q(uid, True)
+    def _q(self, ident, by_id):
+        import psycopg; from psycopg import sql
+        c = self.cfg; cols = [c["id"], c["name"], c["password"], c["role"]] + ([c["active"]] if c["active"] else [])
+        where = [sql.SQL("{}::text=%s").format(sql.Identifier(c["id"]))] if by_id else [sql.SQL("lower({}::text)=%s").format(sql.Identifier(c["login"]))]
+        if c["email"] and not by_id: where.append(sql.SQL("lower({}::text)=%s").format(sql.Identifier(c["email"])))
+        q = sql.SQL("select {} from {} where ").format(sql.SQL(",").join(map(sql.Identifier, cols)),
+              sql.SQL(".").join(map(sql.Identifier, c["table"].split("."))))+sql.SQL(" or ").join(where)
+        with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
             conn.read_only = True
-            rows = conn.execute(
-                query, (ident,) * len(conditions)
-            ).fetchall()
-
-        if len(rows) != 1:
-            return None
-
-        row = rows[0]
-
-        active = (
-            True
-            if not c.get("active")
-            else str(row[4]).strip().lower() in c["active_values"]
-        )
-
-        return UserRecord(
-            id=str(row[0]),
-            name=str(row[1] or ""),
-            pw_hash=str(row[2] or ""),
-            role_raw=str(row[3] or ""),
-            active=active,
-        )
+            rows = conn.execute(q, (ident,) * len(where)).fetchall()
+        if len(rows) != 1: return None            # none, or ambiguous -> refuse rather than guess
+        r = rows[0]
+        active = True if not c["active"] else str(r[4]).strip().lower() in c["active_values"]
+        return UserRecord(str(r[0]), str(r[1]), str(r[2] or ""), str(r[3] or ""), active)

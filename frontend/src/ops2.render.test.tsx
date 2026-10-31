@@ -23,7 +23,7 @@ describe('Garages',()=>{
   await userEvent.selectOptions(screen.getByLabelText('Filter by service'),'BATTERY');await waitFor(()=>expect(calls.some(c=>c.url.includes('service=BATTERY'))).toBe(true))
   await userEvent.type(screen.getByLabelText('Filter by city'),'pune');await waitFor(()=>expect(calls.some(c=>c.url.includes('city=pune'))).toBe(true))})
  it('shows technicians and related tickets in the detail view',async()=>{render(<Garages/>);await userEvent.click(await screen.findByRole('button',{name:'Open Hyderabad Hub'}))
-  expect(await screen.findByText('Ravi')).toBeTruthy();expect(screen.getByText('Charger dead')).toBeTruthy();expect(screen.getByText('Technicians (1)')).toBeTruthy()
+  expect((await screen.findAllByText('Ravi')).length).toBeGreaterThan(0);expect(screen.getByText('Charger dead')).toBeTruthy();expect(screen.getByText('Technicians (1)')).toBeTruthy()
   expect(screen.getByText('Service history (1)')).toBeTruthy();expect(screen.getByText('Old brake job')).toBeTruthy();expect(screen.getAllByText('SC-00001').length).toBeGreaterThan(1)})   // ID shown in list and detail
  it('hides write/export/archive controls for read-only roles',async()=>{reply=(u)=>u.includes('/summary')?{status:200,body:gSum}:{status:200,body:{...gList,can_write:false,can_export:false,can_archive:false}};render(<Garages/>)
   await screen.findByRole('button',{name:'Open Hyderabad Hub'});for(const n of ['Add service center','Export CSV','Edit Hyderabad Hub','Archive Hyderabad Hub'])expect(screen.queryByRole('button',{name:n})).toBeNull()})

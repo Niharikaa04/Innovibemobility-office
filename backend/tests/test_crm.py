@@ -17,7 +17,8 @@ def dsn(tmp_path_factory):
     try: srv = pgserver.get_server(tmp_path_factory.mktemp("pg"), cleanup_mode="stop")
     except Exception as e: pytest.skip(str(e))
     d = srv.get_uri()
-    with psycopg.connect(d, autocommit=True) as c: c.execute(open("../db/001_foundation.sql").read()); c.execute(open("../db/003_crm.sql").read())
+    with psycopg.connect(d, autocommit=True) as c: 
+        for f in ("001_foundation", "003_crm", "013_contact_type", "014_lead_pipeline_fields"): c.execute(open(f"../db/{f}.sql").read())      # crm.py writes columns added by 013/014. 004 is NOT applied here: it removes the legacy 'qualified' stage that a test below relies on
     yield d; srv.cleanup()
 @pytest.fixture()
 def mk(dsn, monkeypatch, tmp_path):
@@ -53,7 +54,9 @@ def test_lead_lifecycle_rules_and_link_without_duplicates(mk):
     assert c.patch(f"/api/crm/leads/{lid}", json={"stage": "lost", "lost_reason": "budget"}).json()["stage"] == "lost"
     assert c.patch(f"/api/crm/leads/{lid}", json={"stage": "won"}).status_code == 409                       # terminal
     assert c.post("/api/crm/leads", json={"title": "x", "value": -5}).status_code == 422 and c.post("/api/crm/leads", json={"title": "x", "contact_id": "00000000-0000-0000-0000-000000000000"}).status_code == 404
-    assert c.post(f"/api/crm/leads/{lid}/activities", json={"note": "called"}).status_code == 201 and len(c.get(f"/api/crm/leads/{lid}/activities").json()) == 1
+    assert c.post(f"/api/crm/leads/{lid}/activities", json={"note": "called"}).status_code == 201
+    acts = c.get(f"/api/crm/leads/{lid}/activities").json()
+    assert len(acts) == 4 and any(a["note"] == "called" for a in acts)      # the note + one history entry per stage change (new->contacted->proposal->lost); stage history lives in the activity log
     assert c.get("/api/crm/leads?stage=lost").json()["total"] == 1 and c.get("/api/crm/leads?stage=bogus").status_code == 422
 def test_permissions_and_csrf(mk):
     anon = mk(None); assert anon.get("/api/crm/contacts").status_code == 401

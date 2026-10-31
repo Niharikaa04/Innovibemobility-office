@@ -20,8 +20,9 @@ def dsn(tmp_path_factory):
     except Exception as e: pytest.skip(f"cannot start disposable Postgres: {e}")
     d = srv.get_uri(); h = bcrypt.hashpw(b"pw", bcrypt.gensalt(4)).decode()
     with psycopg.connect(d, autocommit=True) as c:
-        for f in ("001_foundation", "005_audit_log", "010_service_tickets", "011_ops_tickets_fleet", "011_ops_tickets_fleet"):   # 011 twice: must be re-runnable
-            c.execute((DB / f"{f}.sql").read_text(encoding="utf-8"))
+        from conftest import migration_sql
+        for f in ("001_foundation", "005_audit_log", "010_service_tickets", "011_ops_tickets_fleet", "011_ops_tickets_fleet", "012_garages_technicians_diagnostics_iot"):   # 011 twice: must be re-runnable; 012 adds service_tickets.service_center_id
+            c.execute(migration_sql(f))
         for u, role in PEOPLE:
             eid = c.execute("insert into office_dashboard.employees(employee_code,full_name,email) values(%s,%s,%s) returning id", (u.upper(), f"Person {u}", f"{u}@x.test")).fetchone()[0]
             c.execute("insert into office_dashboard.users(employee_id,username,password_hash,role) values(%s,%s,%s,%s)", (eid, u, h, role))

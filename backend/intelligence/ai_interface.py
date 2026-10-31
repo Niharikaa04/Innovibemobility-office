@@ -7,7 +7,7 @@ What exists now:
   * redact_for_ai(): the only door through which metric data may ever reach a provider. Allow-listed result keys, sensitive fields
     dropped, names replaced by stable aliases, free text neutralised (database text is data, never instructions).
 Provider selection (Stage 3) needs explicit approval of the provider and the data-sharing arrangement: see docs/INTELLIGENCE.md."""
-import re
+import os, re
 from typing import Protocol
 
 from . import results as R
@@ -29,13 +29,20 @@ class UnavailableProvider:
     def complete(self, system, messages, tools): raise ProviderUnavailable("No AI provider has been approved or configured.")
 
 
-def get_provider() -> AIProvider: return UnavailableProvider()      # Stage 3: select an approved provider here, behind explicit configuration
+def configured_provider_name() -> str:
+    """Name requested through AI_PROVIDER, if any. Requesting a provider does NOT enable it: no provider implementation exists in this
+    codebase, and wiring one needs explicit approval of the provider and of exactly which metric fields may leave the server."""
+    return (os.getenv("AI_PROVIDER") or "").strip().lower()[:40]
+
+
+def get_provider() -> AIProvider: return UnavailableProvider()      # Select an approved provider here only after written approval (see docs/INTELLIGENCE.md)
 
 
 def status() -> dict:
-    p = get_provider()
-    return {"ai_available": not isinstance(p, UnavailableProvider), "provider": p.name, "degraded_mode": isinstance(p, UnavailableProvider),
-            "message": "No AI provider is configured. All metrics, alerts and insights work without one." if isinstance(p, UnavailableProvider) else "",
+    p = get_provider(); asked = configured_provider_name()
+    msg = "No AI provider is configured. All metrics, alerts and insights work without one."
+    if asked: msg = "An AI provider was requested in the server settings but none is approved or implemented, so it is NOT used. All metrics, alerts and insights work without one."
+    return {"ai_available": not isinstance(p, UnavailableProvider), "provider": p.name, "degraded_mode": isinstance(p, UnavailableProvider), "message": msg if isinstance(p, UnavailableProvider) else "",
             "data_shared_with_provider": False}
 
 
@@ -59,7 +66,9 @@ def run_tool(name: str, args: dict, ctx: Ctx) -> dict:
     SESSION's role (ctx.role), never with anything the model supplied."""
     spec = next((t for t in tool_catalog(ctx.role) if t["name"] == name), None)
     if spec is None: raise ValueError("Unknown or not permitted tool.")
-    if set(args or {}) - {"period"}: raise ValueError("Unexpected argument.")
+    if args is None: args = {}
+    if not isinstance(args, dict): raise ValueError("Arguments must be an object.")
+    if set(args) - {"period"}: raise ValueError("Unexpected argument.")
     if args.get("period") not in (None, *PERIODS): raise ValueError("Invalid period.")
     return redact_for_ai(compute(spec["metric_id"], ctx).to_dict())
 

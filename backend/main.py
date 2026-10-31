@@ -1,5 +1,6 @@
 """InnoVibe Office OS API: authentication, session security and portal authorization."""
-import os, secrets, time, uuid
+import logging, os, secrets, time, uuid
+import psycopg
 from urllib.parse import urlparse
 from collections import defaultdict
 from typing import Optional
@@ -15,6 +16,7 @@ import intelligence.api as intelligence_api
 from repo import PostgresUserRepo, UserRepo
 from stores import AuditSink, RevocationStore
 load_dotenv(encoding="utf-8-sig")
+log = logging.getLogger("innovibe.api")
 SHORT, LONG = 12 * 3600, 30 * 86400
 class LoginIn(BaseModel):
     username: str = Field(min_length=1, max_length=254); password: str = Field(min_length=1, max_length=256); remember: bool = False
@@ -40,8 +42,22 @@ def create_app(repo: Optional[UserRepo] = None, cfg: Optional[dict] = None, secr
         if os.getenv("COOKIE_SECURE") != "true" and urlparse(o).hostname in ("localhost", "127.0.0.1", "::1"): return
         raise HTTPException(403, "Request origin is not allowed.")
 
+    @app.exception_handler(psycopg.OperationalError)
+    async def _db_down(request, e):
+        log.error("database unavailable (%s) on %s %s", type(e).__name__, request.method, request.url.path)     # never the driver message: it can contain the host and user
+        return JSONResponse({"detail": "The database is temporarily unavailable. Try again shortly."}, 503)
+
     @app.exception_handler(Exception)
-    async def _err(_, e): return JSONResponse({"detail": "Something went wrong on the server."}, 500)
+    async def _err(request, e):
+        log.error("unhandled %s on %s %s", type(e).__name__, request.method, request.url.path)     # exception CLASS and route only: messages can contain SQL, hosts or data
+        return JSONResponse({"detail": "Something went wrong on the server."}, 500)
+
+    @app.middleware("http")
+    async def _api_headers(request: Request, call_next):
+        resp = await call_next(request)
+        if request.url.path.startswith("/api/"):     # API responses hold business data: never store them in a shared/browser cache
+            resp.headers.setdefault("Cache-Control", "no-store"); resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        return resp
 
     def session(request: Request):
         try: s = ser.loads(request.cookies.get("session", ""), max_age=LONG)
@@ -56,7 +72,11 @@ def create_app(repo: Optional[UserRepo] = None, cfg: Optional[dict] = None, secr
         if not secrets.compare_digest(request.headers.get("x-csrf-token", ""), s["csrf"]): raise HTTPException(403, "Security check failed. Reload and try again.")
         return s
 
-    dsn = lambda: os.environ["DATABASE_URL"]; need = access.make_need(session, csrf, audit)
+    def dsn():
+        v = os.environ.get("DATABASE_URL")
+        if not v: raise HTTPException(503, "The database is not configured.")      # a clear, safe 503 instead of a KeyError -> 500
+        return v
+    need = access.make_need(session, csrf, audit)
     app.include_router(crm.build_router(dsn, session, csrf, audit))
     app.include_router(tasks.build_router(dsn, session, csrf, audit, need, repo, cfg, ip))
     app.include_router(people.build_router(dsn, need, ip))
@@ -114,7 +134,7 @@ def create_app(repo: Optional[UserRepo] = None, cfg: Optional[dict] = None, secr
             audit.write("portal_denied", s["id"], None, portal=portal); raise HTTPException(403, "This portal is not available for your role.")
         out = {"kpis": {}, "panels": {}, "not_configured": ["monitoring", "billing"] if portal == "cto" else []}
         if portal == "ceo":
-            snap = crm.snapshot(os.environ["DATABASE_URL"], date_from, date_to)
+            url = os.environ.get("DATABASE_URL"); snap = crm.snapshot(url, date_from, date_to) if url else None    # no database -> "crm" is reported as not configured, never as zero
             if snap: out["kpis"].update(snap["kpis"]); out["panels"].update(snap["panels"])
             else: out["not_configured"].append("crm")
         return out
@@ -127,16 +147,8 @@ def create_app(repo: Optional[UserRepo] = None, cfg: Optional[dict] = None, secr
         return {"configured": all(have.values()), "fields": have, "live_sending": False}
     return app
 
-app = FastAPI()
-
-try:
-    app = create_app()
+try: app = create_app()
 except (config.ConfigError, KeyError) as _e:
-    _m = f"Auth is not configured: {_e}"
-
-    @app.api_route(
-        "/api/{p:path}",
-        methods=["GET", "POST", "PUT", "PATCH", "DELETE"]
-    )
-    def _unconfigured(p: str):
-        raise HTTPException(503, _m)
+    app = FastAPI(); _m = f"Auth is not configured: {_e}"
+    @app.api_route("/api/{p:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+    def _unconfigured(p: str): raise HTTPException(503, _m)

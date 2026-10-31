@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Render tests for Tasks, Employees and Audit Log pages. NOT executed in the sandbox that wrote them (npm registry unreachable): run `npm test`.
 import {describe,it,expect,vi,beforeEach,afterEach} from 'vitest'
-import {render,screen,cleanup,waitFor} from '@testing-library/react'; import userEvent from '@testing-library/user-event'
+import {render,screen,cleanup,waitFor,within} from '@testing-library/react'; import userEvent from '@testing-library/user-event'
 import Tasks from './Tasks'; import {Employees,AuditLog} from './People'
 const labels={open:'Open',in_progress:'In progress',pending_approval:'Pending approval',done:'Done',cancelled:'Cancelled'}
 const base={statuses:Object.keys(labels),status_labels:labels,total:1,page:1,page_size:20,can_write:true,can_archive:false,can_assign:true}
@@ -37,7 +37,7 @@ describe('Tasks dashboard',()=>{
   const t=({'in_progress':4,'done':7,'pending_approval':2} as any)[s||'']??12
   const its=url.searchParams.get('page_size')==='1'?[]:rowsOf().filter(r=>!s||r.status===s);return {status:200,body:{...base,total:url.searchParams.get('page_size')==='1'?t:its.length,items:its}}}
  it('shows KPI cards from API totals and counts overdue from real due dates',async()=>{reply=kpiReply;render(<Tasks/>)
-  const card=(name:string)=>screen.getByRole('button',{name:new RegExp(name)})
+  const card=(name:string)=>screen.getByRole('button',{name:new RegExp('^'+name,'i')})
   await waitFor(()=>expect(card('Total Tasks').textContent).toContain('12'));expect(card('In Progress').textContent).toContain('4');expect(card('Completed').textContent).toContain('7')
   expect(card('Pending Approvals').textContent).toContain('2');await waitFor(()=>expect(card('Overdue').textContent).toContain('1'))})
  it('clicking a KPI card filters by status on the server',async()=>{reply=kpiReply;render(<Tasks/>);await screen.findByText('Prepare report')
@@ -50,14 +50,14 @@ describe('Tasks dashboard',()=>{
   await userEvent.selectOptions(screen.getByLabelText('Filter by assignee'),'');await userEvent.selectOptions(screen.getByLabelText('Filter by due date'),'overdue');expect(screen.queryByText('Book venue')).toBeNull();expect(screen.getByText('Prepare report')).toBeTruthy()})
  it('opens task details, and Edit opens the side panel and saves through PATCH with CSRF',async()=>{reply=kpiReply;render(<Tasks/>)
   await userEvent.click(await screen.findByText('Prepare report'));expect(screen.getByRole('dialog',{name:'Task details'})).toBeTruthy()
-  await userEvent.click(screen.getByRole('button',{name:'Edit task'}));const t=screen.getByLabelText('Title *') as HTMLInputElement;expect(t.value).toBe('Prepare report')
-  await userEvent.clear(t);await userEvent.type(t,'Prepare Q4 report');await userEvent.click(screen.getByRole('button',{name:'Save'}))
+  await userEvent.click(within(screen.getByRole('dialog',{name:'Task details'})).getByRole('button',{name:'Edit'}));const t=screen.getByLabelText('Title *') as HTMLInputElement;expect(t.value).toBe('Prepare report')
+  await userEvent.clear(t);await userEvent.type(t,'Prepare Q4 report');await userEvent.click(screen.getByRole('button',{name:'Save task'}))
   expect(await screen.findByText('Task saved.')).toBeTruthy();const p=calls.find(c=>c.o.method==='PATCH');expect(p.url).toContain('/tasks/T1');expect(p.o.headers['X-CSRF-Token']).toBe('tok123');expect(JSON.parse(p.o.body).title).toBe('Prepare Q4 report')})
  it('creates a task through POST from the side panel',async()=>{reply=kpiReply;render(<Tasks/>);await userEvent.click(await screen.findByRole('button',{name:'Add task'}))
-  await userEvent.type(screen.getByLabelText('Title *'),'New thing');await userEvent.click(screen.getByRole('button',{name:'Save'}));expect(await screen.findByText('Task saved.')).toBeTruthy()
+  await userEvent.type(screen.getByLabelText('Title *'),'New thing');await userEvent.click(screen.getByRole('button',{name:'Save task'}));expect(await screen.findByText('Task saved.')).toBeTruthy()
   const p=calls.find(c=>c.o.method==='POST');expect(p.url).toMatch(/\/tasks$/);expect(JSON.parse(p.o.body).title).toBe('New thing')})
  it('a failed KPI request does not invent numbers',async()=>{reply=(u,m)=>/page_size=(1|50)(&|$)/.test(u)?{status:500,body:{detail:'x'}}:{status:200,body:{...base,items:[task]}};render(<Tasks/>)
-  await screen.findByText('Prepare report');await waitFor(()=>expect(screen.getByRole('button',{name:/Total Tasks/}).textContent).toContain('—'))})})
+  await screen.findByText('Prepare report');await waitFor(()=>expect(screen.getByRole('button',{name:/Total tasks/i}).textContent).toContain('—'))})})
 describe('Employees page',()=>{
  const emp={items:[{id:'E1',employee_code:'EMP-0007',full_name:'Kadali Niharika',email:'n@x.test',department:'IT',designation:'IT Employee',is_active:true,is_technician:false}],total:1,departments:[{id:1,name:'IT'}],can_write:true,can_admin:false}
  it('lists employees, hides Deactivate for non-admins, and never shows password fields',async()=>{reply=()=>({status:200,body:emp});render(<Employees/>)
