@@ -127,8 +127,16 @@ def create_app(repo: Optional[UserRepo] = None, cfg: Optional[dict] = None, secr
         return {"configured": all(have.values()), "fields": have, "live_sending": False}
     return app
 
-try: app = create_app()
+app = FastAPI()
+
+try:
+    app = create_app()
 except (config.ConfigError, KeyError) as _e:
-    app = FastAPI(); _m = f"Auth is not configured: {_e}"
-    @app.api_route("/api/{p:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-    def _unconfigured(p: str): raise HTTPException(503, _m)
+    _m = f"Auth is not configured: {_e}"
+
+    @app.api_route(
+        "/api/{p:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE"]
+    )
+    def _unconfigured(p: str):
+        raise HTTPException(503, _m)
