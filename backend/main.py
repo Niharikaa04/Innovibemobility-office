@@ -147,8 +147,14 @@ def create_app(repo: Optional[UserRepo] = None, cfg: Optional[dict] = None, secr
         return {"configured": all(have.values()), "fields": have, "live_sending": False}
     return app
 
-try: app = create_app()
-except (config.ConfigError, KeyError) as _e:
-    app = FastAPI(); _m = f"Auth is not configured: {_e}"
-    @app.api_route("/api/{p:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-    def _unconfigured(p: str): raise HTTPException(503, _m)
+def _build_app():
+    """Real app when configured; otherwise an app that answers every /api call with a clear 503 (never a crash at import time)."""
+    try: return create_app()
+    except (config.ConfigError, KeyError) as _e:
+        fallback = FastAPI(); _m = f"Auth is not configured: {_e}"
+        @fallback.api_route("/api/{p:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+        def _unconfigured(p: str): raise HTTPException(503, _m)
+        return fallback
+
+
+app = _build_app()      # a plain module-level assignment: hosting platforms (Vercel) look for `app` here without running the file
