@@ -22,9 +22,10 @@ class LoginIn(BaseModel):
     username: str = Field(min_length=1, max_length=254); password: str = Field(min_length=1, max_length=256); remember: bool = False
 class ForgotIn(BaseModel): identifier: str = Field(min_length=1, max_length=254)
 
-def create_app(repo: Optional[UserRepo] = None, cfg: Optional[dict] = None, secret: Optional[str] = None,
+def _configure(app: FastAPI, repo: Optional[UserRepo] = None, cfg: Optional[dict] = None, secret: Optional[str] = None,
                revoked: Optional[RevocationStore] = None, audit: Optional[AuditSink] = None) -> FastAPI:
-    app = FastAPI(title="InnoVibe Office OS", docs_url=None, redoc_url=None)
+    """Attach every route, handler and middleware to `app`. All configuration is read BEFORE the first route is added, so a configuration error
+    leaves `app` untouched."""
     cfg = cfg or config.load(); repo = repo or PostgresUserRepo(os.environ["DATABASE_URL"], cfg)
     ser = URLSafeTimedSerializer(secret or os.environ["SESSION_SECRET"]); revoked = revoked or RevocationStore(); audit = audit or AuditSink()
     origins = {o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()}
@@ -147,14 +148,15 @@ def create_app(repo: Optional[UserRepo] = None, cfg: Optional[dict] = None, secr
         return {"configured": all(have.values()), "fields": have, "live_sending": False}
     return app
 
-def _build_app():
-    """Real app when configured; otherwise an app that answers every /api call with a clear 503 (never a crash at import time)."""
-    try: return create_app()
-    except (config.ConfigError, KeyError) as _e:
-        fallback = FastAPI(); _m = f"Auth is not configured: {_e}"
-        @fallback.api_route("/api/{p:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-        def _unconfigured(p: str): raise HTTPException(503, _m)
-        return fallback
+def create_app(repo: Optional[UserRepo] = None, cfg: Optional[dict] = None, secret: Optional[str] = None,
+               revoked: Optional[RevocationStore] = None, audit: Optional[AuditSink] = None) -> FastAPI:
+    """A fresh, fully configured app (used by the tests)."""
+    return _configure(FastAPI(title="InnoVibe Office OS", docs_url=None, redoc_url=None), repo, cfg, secret, revoked, audit)
 
 
-app = _build_app()      # a plain module-level assignment: hosting platforms (Vercel) look for `app` here without running the file
+app = FastAPI(title="InnoVibe Office OS", docs_url=None, redoc_url=None)      # literal module-level app: hosting platforms (Vercel) detect it here
+try: _configure(app)
+except (config.ConfigError, KeyError) as _e:      # not configured: every /api call gets a clear 503 instead of the process failing at import time
+    _m = f"Auth is not configured: {_e}"
+    @app.api_route("/api/{p:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+    def _unconfigured(p: str): raise HTTPException(503, _m)
