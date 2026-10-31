@@ -1,0 +1,7 @@
+/* Finance pages only. Extra badge colours for invoice / payment / expense states (Operations colours are untouched). Scoped under .ops. */
+.ops .badge:is(.PAID,.APPROVED,.SENT){--c:var(--o-g)}
+.ops .badge:is(.UNPAID,.PARTIAL){--c:var(--o-a)}
+.ops .badge:is(.DRAFT,.CANCELLED,.VOIDED){--c:var(--o-n)}
+.ops .badge:is(.REJECTED){--c:var(--o-r)}
+.ops .fin-pick{list-style:none;margin:0;padding:0;display:grid;gap:4px}
+.ops .fin-pick button{width:100%;text-align:left}

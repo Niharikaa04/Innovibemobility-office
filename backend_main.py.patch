@@ -1,0 +1,22 @@
+--- a/backend/main.py
++++ b/backend/main.py
+@@ -9,7 +9,7 @@
+ from fastapi.responses import JSONResponse
+ from itsdangerous import BadSignature, URLSafeTimedSerializer
+ from pydantic import BaseModel, Field
+-import access, attendance, leave, config, passwords, crm, people, permissions, tasks, workspaces, ticketapi, fleetapi
++import access, attendance, leave, config, passwords, crm, people, permissions, tasks, workspaces, ticketapi, fleetapi, garageapi, technicianapi, diagapi, iotapi
+ from repo import PostgresUserRepo, UserRepo
+ from stores import AuditSink, RevocationStore
+ load_dotenv(encoding="utf-8-sig")
+@@ -63,6 +63,10 @@
+     app.include_router(workspaces.build_router(dsn, session, csrf, audit))
+     app.include_router(ticketapi.build_router(dsn, session, csrf, audit))
+     app.include_router(fleetapi.build_router(dsn, session, csrf, audit))
++    app.include_router(garageapi.build_router(dsn, session, csrf, audit))
++    app.include_router(technicianapi.build_router(dsn, session, csrf, audit))
++    app.include_router(diagapi.build_router(dsn, session, csrf, audit))
++    app.include_router(iotapi.build_router(dsn, session, csrf, audit))
+     @app.get("/api/auth/permissions")
+     def my_permissions(s=Depends(session)):   # lets the UI show/hide controls; the server still enforces every call
+         return {"role": s["role"], "permissions": permissions.permissions_for(s["role"])}

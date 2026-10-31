@@ -1,0 +1,462 @@
+diff -ruN a/backend/.env.example b/backend/.env.example
+--- a/backend/.env.example	2026-10-26 09:37:56.303686561 +0000
++++ b/backend/.env.example	2026-10-26 09:37:57.144877883 +0000
+@@ -25,3 +25,5 @@
+ # CRM permissions (server-side). Only roles listed here can read/write CRM. There is no CCO role; assign commercial users by role.
+ CRM_WRITE_ROLES=ceo
+ CRM_READ_ROLES=ceo,coo
++# Who may DELETE (soft-delete/archive) contacts and leads. Must also have CRM read access. Permanent deletion is NOT implemented.
++CRM_ARCHIVE_ROLES=ceo
+diff -ruN a/backend/crm.py b/backend/crm.py
+--- a/backend/crm.py	2026-10-26 09:37:56.302382428 +0000
++++ b/backend/crm.py	2026-10-26 09:37:57.143113506 +0000
+@@ -1,15 +1,22 @@
+ """CRM: contacts + leads (+ activities) and the CEO KPI snapshot. All writes are CSRF-protected, role-checked server-side, audited."""
+-import os, re
++import logging, os, re
+ from datetime import date
+ from typing import Literal, Optional
+ import psycopg
+ from psycopg.rows import dict_row
+ from fastapi import APIRouter, Depends, HTTPException, Query
+ from pydantic import BaseModel, Field, field_validator
+-STAGES = ["new", "contacted", "qualified", "proposal", "negotiation", "won", "lost"]   # from the CEO reference funnel; not confirmed company policy
+-LABEL = {"new": "New Leads", "contacted": "Contacted", "qualified": "Qualified", "proposal": "Proposal", "negotiation": "Negotiation", "won": "Won"}
++log = logging.getLogger("crm")
++# Selectable pipeline (decided by the CEO): New Lead -> Contacted -> Proposal Sent -> Negotiation -> Won / Lost.
++# DB values stay short ("proposal" is shown as "Proposal Sent") so no data rewrite is needed.
++STAGES = ["new", "contacted", "proposal", "negotiation", "won", "lost"]
++STAGE_LABELS = {"new": "New Lead", "contacted": "Contacted", "proposal": "Proposal Sent", "negotiation": "Negotiation", "won": "Won", "lost": "Lost"}
++# "qualified" is LEGACY: db/003 still allows it until db/004 is applied. Existing rows are read/ordered correctly but it can no longer be set.
++RANK = {"new": 0, "contacted": 1, "qualified": 2, "proposal": 3, "negotiation": 4, "won": 5, "lost": 6}
++LABEL = {k: STAGE_LABELS[k] for k in ("new", "contacted", "proposal", "negotiation", "won")}   # funnel panel on the CEO dashboard
+ roles = lambda n, d: {r.strip() for r in os.getenv(n, d).split(",") if r.strip()}
+ W = lambda: roles("CRM_WRITE_ROLES", "ceo"); R = lambda: roles("CRM_READ_ROLES", "ceo,coo") | W()
++A = lambda: roles("CRM_ARCHIVE_ROLES", "ceo") & R()   # who may delete (= archive). Separate from write; a role must also be able to read CRM.
+ class ContactBody(BaseModel):
+     full_name: Optional[str] = Field(None, min_length=1, max_length=120); email: Optional[str] = Field(None, max_length=254)
+     phone: Optional[str] = None; organization: Optional[str] = Field(None, max_length=160); notes: Optional[str] = Field(None, max_length=2000)
+@@ -25,17 +32,25 @@
+         return v
+ class LeadBody(BaseModel):
+     title: Optional[str] = Field(None, min_length=1, max_length=160); contact_id: Optional[str] = None; source: Optional[str] = Field(None, max_length=80)
+-    stage: Optional[Literal["new", "contacted", "qualified", "proposal", "negotiation", "won", "lost"]] = None
++    stage: Optional[Literal["new", "contacted", "proposal", "negotiation", "won", "lost"]] = None
+     value: Optional[float] = Field(None, ge=0, le=1e12); next_follow_up: Optional[date] = None; lost_reason: Optional[str] = Field(None, max_length=500)
++    @field_validator("title", mode="before")
++    def title_strip(cls, v):
++        if isinstance(v, str):
++            v = v.strip()
++            if not v: raise ValueError("Title cannot be empty")
++        return v
+ class Note(BaseModel): note: str = Field(min_length=1, max_length=2000)
+ 
+ def snapshot(dsn):
+     """CEO KPIs from real rows. Returns None if the CRM tables are unreachable (=> 'unavailable', never a made-up zero)."""
+     try:
+-        with psycopg.connect(dsn, connect_timeout=5) as c:
++        with psycopg.connect(dsn, connect_timeout=5, prepare_threshold=None) as c:
+             n = c.execute("select count(*) from office_dashboard.leads where not is_archived and created_at >= now() - interval '30 days'").fetchone()[0]
+             by = dict(c.execute("select stage, count(*) from office_dashboard.leads where not is_archived group by 1").fetchall())
+-    except Exception: return None
++    except Exception as e:
++        log.warning("CRM snapshot unavailable: %s", type(e).__name__)   # class only: never log the DSN or message (may contain host/credentials)
++        return None
+     return {"kpis": {"New Leads": {"value": str(n), "trend": "last 30 days"}}, "panels": {"pipeline": [{"name": LABEL[s], "value": by.get(s, 0)} for s in STAGES if s in LABEL]}}
+ 
+ def build_router(dsn, session, csrf, audit):
+@@ -46,7 +61,11 @@
+     def write(s=Depends(csrf)):
+         if s["role"] not in W(): raise HTTPException(403, "You do not have permission to change CRM records.")
+         return s
+-    def db(): return psycopg.connect(dsn(), row_factory=dict_row, connect_timeout=10)
++    def arch(s=Depends(csrf)):
++        if s["role"] not in A():
++            audit.write("crm_archive_denied", s["id"], None, role=s["role"]); raise HTTPException(403, "You do not have permission to delete CRM records.")
++        return s
++    def db(): return psycopg.connect(dsn(), row_factory=dict_row, connect_timeout=10, prepare_threshold=None)   # no server-side prepared statements: safe behind Supabase pgbouncer (transaction mode)
+     def page(table, where, args, p, size, extra=""):
+         with db() as c:
+             total = c.execute(f"select count(*) as n from office_dashboard.{table} t where not t.is_archived {where}", args).fetchone()["n"]
+@@ -64,7 +83,7 @@
+     def contacts(q: str = "", page_no: int = Query(1, alias="page", ge=1), page_size: int = Query(20, ge=1, le=100), s=Depends(read)):
+         w, a = ("and (t.full_name ilike %s or t.email ilike %s or t.organization ilike %s)", [like(q)] * 3) if q.strip() else ("", [])
+         rows, total = page("contacts", w, a, page_no, page_size)
+-        return {"items": rows, "total": total, "page": page_no, "page_size": page_size, "can_write": s["role"] in W()}
++        return {"items": rows, "total": total, "page": page_no, "page_size": page_size, "can_write": s["role"] in W(), "can_archive": s["role"] in A()}
+     @r.post("/contacts", status_code=201)
+     def add_contact(b: ContactBody, s=Depends(write)):
+         if not b.full_name: raise HTTPException(422, "Name is required.")
+@@ -87,21 +106,21 @@
+         except psycopg.errors.UniqueViolation as e: dup(e)
+         audit.write("contact_updated", s["id"], None, record=cid); return row
+     @r.delete("/contacts/{cid}")
+-    def archive_contact(cid: str, s=Depends(write)):
++    def archive_contact(cid: str, s=Depends(arch)):
+         with db() as c:
+             one(c, "contacts", cid)
+             if c.execute("select 1 from office_dashboard.leads where contact_id=%s and not is_archived and stage not in ('won','lost')", (cid,)).fetchone(): raise HTTPException(409, "This contact has open leads. Close or archive them first.")
+             c.execute("update office_dashboard.contacts set is_archived=true,updated_by=%s,updated_at=now() where id=%s", (s["id"], cid))
+-        audit.write("contact_archived", s["id"], None, record=cid); return {"ok": True}
++        audit.write("contact_archived", s["id"], None, record_type="contact", record=cid); return {"ok": True}
+ 
+     @r.get("/leads")
+     def leads(q: str = "", stage: str = "", page_no: int = Query(1, alias="page", ge=1), page_size: int = Query(20, ge=1, le=100), s=Depends(read)):
+-        if stage and stage not in STAGES: raise HTTPException(422, "Unknown stage.")
++        if stage and stage not in RANK: raise HTTPException(422, "Unknown stage.")
+         w, a = "", []
+         if q.strip(): w += "and (t.title ilike %s or t.source ilike %s)"; a += [like(q)] * 2
+         if stage: w += " and t.stage=%s"; a.append(stage)
+         rows, total = page("leads", w, a, page_no, page_size, ",(select full_name from office_dashboard.contacts k where k.id=t.contact_id) as contact_name")
+-        return {"items": rows, "total": total, "page": page_no, "page_size": page_size, "can_write": s["role"] in W(), "stages": STAGES}
++        return {"items": rows, "total": total, "page": page_no, "page_size": page_size, "can_write": s["role"] in W(), "can_archive": s["role"] in A(), "stages": STAGES, "stage_labels": STAGE_LABELS}
+     @r.post("/leads", status_code=201)
+     def add_lead(b: LeadBody, s=Depends(write)):
+         if not b.title: raise HTTPException(422, "Title is required.")
+@@ -114,22 +133,25 @@
+     def edit_lead(lid: str, b: LeadBody, s=Depends(write)):
+         d = b.model_dump(exclude_unset=True)
+         if not d: raise HTTPException(422, "Nothing to update.")
++        for k in ("title", "stage"):
++            if k in d and d[k] is None: raise HTTPException(422, f"{k.capitalize()} cannot be empty.")
+         with db() as c:
+             cur = one(c, "leads", lid)
+             if "stage" in d and d["stage"] != cur["stage"]:
+                 if cur["stage"] in ("won", "lost"): raise HTTPException(409, f"A {cur['stage']} lead cannot change stage.")
+-                if d["stage"] != "lost" and STAGES.index(d["stage"]) < STAGES.index(cur["stage"]): raise HTTPException(409, "A lead cannot move back to an earlier stage.")
++                if d["stage"] != "lost" and RANK[d["stage"]] < RANK.get(cur["stage"], 0): raise HTTPException(409, "A lead cannot move back to an earlier stage.")
+                 if d["stage"] == "lost" and not (d.get("lost_reason") or "").strip(): raise HTTPException(422, "A reason is required for a lost lead.")
+             if d.get("contact_id"): one(c, "contacts", d["contact_id"])
+             row = c.execute("update office_dashboard.leads set " + ",".join(f"{k}=%s" for k in d) + ",updated_by=%s,updated_at=now() where id=%s returning *", [*d.values(), s["id"], lid]).fetchone()
+         audit.write("lead_updated", s["id"], None, record=lid, stage=row["stage"]); return row
+     @r.delete("/leads/{lid}")
+-    def archive_lead(lid: str, s=Depends(write)):
++    def archive_lead(lid: str, s=Depends(arch)):
+         with db() as c: one(c, "leads", lid); c.execute("update office_dashboard.leads set is_archived=true,updated_by=%s,updated_at=now() where id=%s", (s["id"], lid))
+-        audit.write("lead_archived", s["id"], None, record=lid); return {"ok": True}
++        audit.write("lead_archived", s["id"], None, record_type="lead", record=lid); return {"ok": True}
+     @r.post("/leads/{lid}/activities", status_code=201)
+     def add_note(lid: str, b: Note, s=Depends(write)):
+-        with db() as c: one(c, "leads", lid); return c.execute("insert into office_dashboard.lead_activities(lead_id,note,created_by) values(%s,%s,%s) returning *", (lid, b.note.strip(), s["id"])).fetchone()
++        with db() as c: one(c, "leads", lid); row = c.execute("insert into office_dashboard.lead_activities(lead_id,note,created_by) values(%s,%s,%s) returning *", (lid, b.note.strip(), s["id"])).fetchone()
++        audit.write("lead_note_added", s["id"], None, record=lid); return row
+     @r.get("/leads/{lid}/activities")
+     def notes(lid: str, s=Depends(read)):
+         with db() as c: one(c, "leads", lid); return c.execute("select * from office_dashboard.lead_activities where lead_id=%s order by created_at desc", (lid,)).fetchall()
+diff -ruN a/backend/repo.py b/backend/repo.py
+--- a/backend/repo.py	2026-10-26 09:37:56.302274021 +0000
++++ b/backend/repo.py	2026-10-26 09:37:57.142874645 +0000
+@@ -21,7 +21,7 @@
+         if c["email"] and not by_id: where.append(sql.SQL("lower({}::text)=%s").format(sql.Identifier(c["email"])))
+         q = sql.SQL("select {} from {} where ").format(sql.SQL(",").join(map(sql.Identifier, cols)),
+               sql.SQL(".").join(map(sql.Identifier, c["table"].split("."))))+sql.SQL(" or ").join(where)
+-        with psycopg.connect(self.dsn) as conn:
++        with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
+             conn.read_only = True
+             rows = conn.execute(q, (ident,) * len(where)).fetchall()
+         if len(rows) != 1: return None            # none, or ambiguous -> refuse rather than guess
+diff -ruN a/backend/tests/test_crm.py b/backend/tests/test_crm.py
+--- a/backend/tests/test_crm.py	2026-10-26 09:37:56.303314986 +0000
++++ b/backend/tests/test_crm.py	2026-10-26 09:37:57.144086543 +0000
+@@ -45,7 +45,8 @@
+ def test_lead_lifecycle_rules_and_link_without_duplicates(mk):
+     c = mk("ceo"); cid = c.post("/api/crm/contacts", json={"full_name": "Lead Contact"}).json()["id"]
+     l = c.post("/api/crm/leads", json={"title": "10 e-vans", "contact_id": cid, "source": "website", "value": 2500000}); assert l.status_code == 201 and l.json()["stage"] == "new"; lid = l.json()["id"]
+-    assert c.patch(f"/api/crm/leads/{lid}", json={"stage": "qualified"}).json()["stage"] == "qualified"
++    assert c.patch(f"/api/crm/leads/{lid}", json={"stage": "contacted"}).json()["stage"] == "contacted"
++    assert c.patch(f"/api/crm/leads/{lid}", json={"stage": "proposal"}).json()["stage"] == "proposal"
+     assert c.patch(f"/api/crm/leads/{lid}", json={"stage": "new"}).status_code == 409                       # no going back
+     assert c.delete(f"/api/crm/contacts/{cid}").status_code == 409                                          # open lead blocks archive
+     assert c.patch(f"/api/crm/leads/{lid}", json={"stage": "lost"}).status_code == 422                      # reason required
+@@ -61,9 +62,79 @@
+     ceo = mk("ceo"); del ceo.headers["x-csrf-token"]; assert ceo.post("/api/crm/contacts", json={"full_name": "x"}).status_code == 403
+ def test_ceo_dashboard_reflects_database_changes(mk):
+     c = mk("ceo"); base = c.get("/api/dashboard/ceo").json(); assert base["kpis"]["New Leads"]["value"] == "0"
+-    for t, st in (("a", "new"), ("b", "new"), ("c", "qualified")): c.post("/api/crm/leads", json={"title": t, "stage": st})
++    for t, st in (("a", "new"), ("b", "new"), ("c", "contacted")): c.post("/api/crm/leads", json={"title": t, "stage": st})
+     d = c.get("/api/dashboard/ceo").json(); assert d["kpis"]["New Leads"]["value"] == "3"
+-    assert {p["name"]: p["value"] for p in d["panels"]["pipeline"]}["New Leads"] == 2 and {p["name"]: p["value"] for p in d["panels"]["pipeline"]}["Qualified"] == 1
++    assert {p["name"]: p["value"] for p in d["panels"]["pipeline"]}["New Lead"] == 2 and {p["name"]: p["value"] for p in d["panels"]["pipeline"]}["Contacted"] == 1
+ def test_dashboard_marks_crm_unavailable_when_db_unreachable(mk, monkeypatch):
+     c = mk("ceo"); monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@127.0.0.1:1/x"); d = c.get("/api/dashboard/ceo").json()
+     assert "crm" in d["not_configured"] and "New Leads" not in d["kpis"]
++
++# ---- regression tests for the audited bugs (no live Supabase needed: disposable local Postgres) ----
++def test_pipeline_is_exactly_the_decided_stages_and_qualified_cannot_be_set(mk):
++    c = mk("ceo"); r = c.get("/api/crm/leads").json()
++    assert r["stages"] == ["new", "contacted", "proposal", "negotiation", "won", "lost"] and r["stage_labels"]["proposal"] == "Proposal Sent"
++    assert c.post("/api/crm/leads", json={"title": "x", "stage": "qualified"}).status_code == 422
++    lid = c.post("/api/crm/leads", json={"title": "x"}).json()["id"]
++    assert c.patch(f"/api/crm/leads/{lid}", json={"stage": "qualified"}).status_code == 422
++def test_legacy_qualified_rows_still_work_and_can_only_move_forward(mk, dsn):
++    c = mk("ceo"); lid = c.post("/api/crm/leads", json={"title": "legacy"}).json()["id"]
++    with psycopg.connect(dsn, autocommit=True) as k: k.execute("update office_dashboard.leads set stage='qualified' where id=%s", (lid,))
++    assert c.get("/api/crm/leads?stage=qualified").json()["total"] == 1
++    assert c.patch(f"/api/crm/leads/{lid}", json={"stage": "contacted"}).status_code == 409      # qualified ranks after contacted
++    assert c.patch(f"/api/crm/leads/{lid}", json={"stage": "proposal"}).json()["stage"] == "proposal"
++def test_null_or_blank_required_fields_are_422_not_500(mk):
++    c = mk("ceo"); lid = c.post("/api/crm/leads", json={"title": "ok"}).json()["id"]
++    for bad in ({"stage": None}, {"title": None}, {"title": "   "}): assert c.patch(f"/api/crm/leads/{lid}", json=bad).status_code == 422, bad
++    assert c.post("/api/crm/leads", json={"title": "   "}).status_code == 422
++    assert c.patch(f"/api/crm/leads/{lid}", json={"title": "  Trimmed  "}).json()["title"] == "Trimmed"
++def test_lead_can_be_unlinked_from_its_contact(mk):
++    c = mk("ceo"); cid = c.post("/api/crm/contacts", json={"full_name": "P"}).json()["id"]
++    lid = c.post("/api/crm/leads", json={"title": "t", "contact_id": cid}).json()["id"]
++    assert c.patch(f"/api/crm/leads/{lid}", json={"contact_id": None}).json()["contact_id"] is None
++def test_lead_note_is_audited_and_listed(mk, tmp_path):
++    c = mk("ceo"); lid = c.post("/api/crm/leads", json={"title": "t"}).json()["id"]
++    assert c.post(f"/api/crm/leads/{lid}/activities", json={"note": "called"}).status_code == 201
++    assert "lead_note_added" in (tmp_path / "a").read_text() and c.get(f"/api/crm/leads/{lid}/activities").json()[0]["note"] == "called"
++def test_snapshot_failure_is_logged_without_secrets(caplog):
++    import crm; caplog.set_level("WARNING", logger="crm")
++    assert crm.snapshot("postgresql://u:SECRETPW@127.0.0.1:1/x") is None
++    assert "CRM snapshot unavailable" in caplog.text and "SECRETPW" not in caplog.text
++
++# ---- Delete = archive: permissions enforced server-side, soft delete, audit trail ----
++import json
++def audit_rows(tmp_path): return [json.loads(l) for l in (tmp_path / "a").read_text().splitlines()]
++def test_ceo_delete_is_a_soft_archive_with_full_audit_record(mk, dsn, tmp_path):
++    c = mk("ceo"); cid = c.post("/api/crm/contacts", json={"full_name": "Gone", "email": "g@x.test"}).json()["id"]
++    assert c.get("/api/crm/contacts").json()["can_archive"] is True
++    assert c.delete(f"/api/crm/contacts/{cid}").status_code == 200
++    assert c.get("/api/crm/contacts").json()["total"] == 0 and c.get(f"/api/crm/contacts/{cid}").status_code == 404      # hidden from active views
++    with psycopg.connect(dsn) as k: assert k.execute("select is_archived from office_dashboard.contacts where id=%s", (cid,)).fetchone()[0] is True   # row kept
++    a = [r for r in audit_rows(tmp_path) if r["action"] == "contact_archived"][0]
++    assert a["user"] == "1" and a["record_type"] == "contact" and a["record"] == cid and a["ts"] > 0
++    assert c.post("/api/crm/contacts", json={"full_name": "Again", "email": "g@x.test"}).status_code == 201                  # email reusable after archive
++def test_lead_delete_keeps_notes_hides_lead_and_leaves_dashboard_counts(mk, dsn, tmp_path):
++    c = mk("ceo"); lid = c.post("/api/crm/leads", json={"title": "bye"}).json()["id"]; c.post(f"/api/crm/leads/{lid}/activities", json={"note": "n"})
++    assert c.get("/api/dashboard/ceo").json()["kpis"]["New Leads"]["value"] == "1"
++    assert c.delete(f"/api/crm/leads/{lid}").status_code == 200
++    assert c.get("/api/crm/leads").json()["total"] == 0 and c.get("/api/dashboard/ceo").json()["kpis"]["New Leads"]["value"] == "0"
++    with psycopg.connect(dsn) as k: assert k.execute("select count(*) from office_dashboard.lead_activities where lead_id=%s", (lid,)).fetchone()[0] == 1
++    a = [r for r in audit_rows(tmp_path) if r["action"] == "lead_archived"][0]; assert a["record_type"] == "lead" and a["record"] == lid and a["user"] == "1"
++def test_write_permission_alone_does_not_allow_delete(mk, monkeypatch, tmp_path):
++    monkeypatch.setenv("CRM_WRITE_ROLES", "ceo,coo"); ceo = mk("ceo"); coo = mk("coo")
++    cid = ceo.post("/api/crm/contacts", json={"full_name": "K"}).json()["id"]; lid = ceo.post("/api/crm/leads", json={"title": "K"}).json()["id"]
++    assert coo.post("/api/crm/contacts", json={"full_name": "by coo"}).status_code == 201 and coo.get("/api/crm/contacts").json()["can_archive"] is False
++    assert coo.delete(f"/api/crm/contacts/{cid}").status_code == 403 and coo.delete(f"/api/crm/leads/{lid}").status_code == 403
++    assert ceo.get(f"/api/crm/contacts/{cid}").status_code == 200                                                            # nothing was archived
++    d = [r for r in audit_rows(tmp_path) if r["action"] == "crm_archive_denied"]; assert d and d[0]["user"] == "2"
++def test_delete_can_be_granted_to_coo_by_config_only(mk, monkeypatch):
++    monkeypatch.setenv("CRM_ARCHIVE_ROLES", "ceo,coo"); ceo = mk("ceo"); coo = mk("coo"); cid = ceo.post("/api/crm/contacts", json={"full_name": "K"}).json()["id"]
++    assert coo.delete(f"/api/crm/contacts/{cid}").status_code == 200
++def test_archive_role_must_also_have_crm_read_access_and_others_never_delete(mk, monkeypatch):
++    monkeypatch.setenv("CRM_ARCHIVE_ROLES", "ceo,employee"); ceo = mk("ceo"); emp = mk("emp"); cid = ceo.post("/api/crm/contacts", json={"full_name": "K"}).json()["id"]
++    assert emp.delete(f"/api/crm/contacts/{cid}").status_code == 403                                                          # listed, but no CRM read access
++    anon = mk(None); assert anon.delete(f"/api/crm/contacts/{cid}").status_code == 401
++    ceo2 = mk("ceo"); del ceo2.headers["x-csrf-token"]; assert ceo2.delete(f"/api/crm/contacts/{cid}").status_code == 403    # CSRF still enforced
++def test_deleting_twice_or_unknown_id_is_404_and_not_audited_as_success(mk, tmp_path):
++    c = mk("ceo"); cid = c.post("/api/crm/contacts", json={"full_name": "K"}).json()["id"]; c.delete(f"/api/crm/contacts/{cid}")
++    assert c.delete(f"/api/crm/contacts/{cid}").status_code == 404 and c.delete("/api/crm/leads/not-a-uuid").status_code == 404
++    assert len([r for r in audit_rows(tmp_path) if r["action"] == "contact_archived"]) == 1
+diff -ruN a/backend/tests/test_migration_004.py b/backend/tests/test_migration_004.py
+--- a/backend/tests/test_migration_004.py	1970-01-01 00:00:00.000000000 +0000
++++ b/backend/tests/test_migration_004.py	2026-10-26 09:37:57.144235742 +0000
+@@ -0,0 +1,25 @@
++"""db/004_pipeline_stages.sql + rollback, proven on a DISPOSABLE local Postgres (never your Supabase)."""
++import pytest
++pgserver = pytest.importorskip("pgserver")
++import psycopg
++D = "../db/"
++def run(c, f): c.execute(open(D + f).read())
++@pytest.fixture()
++def c(tmp_path):
++    try: srv = pgserver.get_server(tmp_path, cleanup_mode="stop")
++    except Exception as e: pytest.skip(str(e))
++    with psycopg.connect(srv.get_uri(), autocommit=True) as k:
++        run(k, "001_foundation.sql"); run(k, "003_crm.sql"); yield k
++    srv.cleanup()
++ins = lambda c, st: c.execute("insert into office_dashboard.leads(title,stage) values('t',%s)", (st,))
++def test_004_aborts_and_changes_nothing_while_qualified_rows_exist(c):
++    ins(c, "qualified")
++    with pytest.raises(psycopg.errors.RaiseException): run(c, "004_pipeline_stages.sql")
++    ins(c, "qualified")                                   # constraint still the old one
++    assert c.execute("select count(*) from office_dashboard.leads").fetchone()[0] == 2
++def test_004_applies_is_rerunnable_and_rolls_back(c):
++    ins(c, "proposal"); run(c, "004_pipeline_stages.sql"); run(c, "004_pipeline_stages.sql")
++    with pytest.raises(psycopg.errors.CheckViolation): ins(c, "qualified")
++    ins(c, "negotiation")
++    assert c.execute("select count(*) from office_dashboard.leads").fetchone()[0] == 2         # existing data untouched
++    run(c, "004_pipeline_stages.rollback.sql"); ins(c, "qualified")                           # old behaviour restored
+diff -ruN a/db/004_pipeline_stages.rollback.sql b/db/004_pipeline_stages.rollback.sql
+--- a/db/004_pipeline_stages.rollback.sql	1970-01-01 00:00:00.000000000 +0000
++++ b/db/004_pipeline_stages.rollback.sql	2026-10-26 09:37:57.781685338 +0000
+@@ -0,0 +1,11 @@
++-- Rollback for 004: restores the original stage constraint from 003 (re-allows 'qualified'). No data is changed.
++do $$
++declare c text;
++begin
++  for c in select conname from pg_constraint
++           where conrelid = 'office_dashboard.leads'::regclass and contype = 'c' and pg_get_constraintdef(oid) ilike '%stage%' loop
++    execute format('alter table office_dashboard.leads drop constraint %I', c);
++  end loop;
++  alter table office_dashboard.leads add constraint leads_stage_check
++    check (stage in ('new','contacted','qualified','proposal','negotiation','won','lost'));
++end $$;
+diff -ruN a/db/004_pipeline_stages.sql b/db/004_pipeline_stages.sql
+--- a/db/004_pipeline_stages.sql	1970-01-01 00:00:00.000000000 +0000
++++ b/db/004_pipeline_stages.sql	2026-10-26 09:37:57.781697523 +0000
+@@ -0,0 +1,18 @@
++-- 004: restrict lead stages to New Lead / Contacted / Proposal Sent / Negotiation / Won / Lost (removes legacy 'qualified').
++-- NOT APPLIED to any database yet. Review first. Reversible with 004_pipeline_stages.rollback.sql.
++-- STEP 0 (read-only, run first): select stage, count(*) from office_dashboard.leads group by 1 order by 1;
++--   If 'qualified' rows exist this script ABORTS and changes nothing. Decide per business (e.g. qualified -> contacted or proposal),
++--   then move those rows explicitly with your own reviewed UPDATE. This script never rewrites data.
++-- The enum VALUE 'proposal' is kept (the app displays it as "Proposal Sent"), so no data rewrite is needed.
++do $$
++declare n bigint; c text;
++begin
++  select count(*) into n from office_dashboard.leads where stage = 'qualified';
++  if n > 0 then raise exception '004 aborted: % lead(s) are still in legacy stage "qualified". Move them first.', n; end if;
++  for c in select conname from pg_constraint
++           where conrelid = 'office_dashboard.leads'::regclass and contype = 'c' and pg_get_constraintdef(oid) ilike '%stage%' loop
++    execute format('alter table office_dashboard.leads drop constraint %I', c);
++  end loop;
++  alter table office_dashboard.leads add constraint leads_stage_check
++    check (stage in ('new','contacted','proposal','negotiation','won','lost'));
++end $$;
+diff -ruN a/docs/PHASE1_AUDIT.md b/docs/PHASE1_AUDIT.md
+--- a/docs/PHASE1_AUDIT.md	2026-10-26 09:37:56.304673400 +0000
++++ b/docs/PHASE1_AUDIT.md	2026-10-26 09:37:57.781731419 +0000
+@@ -173,3 +173,20 @@
+ 
+ ## Assumptions to confirm
+ Lead stages (new, contacted, qualified, proposal, negotiation, won, lost) follow the CEO reference funnel; they are not confirmed company policy. Pipeline counts are leads *currently in* each stage (not cumulative). "New Leads" = leads created in the last 30 days. No CCO role exists; CRM write access defaults to ceo only.
++
++---
++# CRM bug-fix round (code only; NO Supabase access, nothing run against any real database)
++Supabase: project kfyakvllofevjgmbxtpr was NOT accessible to the connected account (permission denied). No query or change was made to any project.
++Fixed + regression-tested on a disposable local Postgres: stages are now New Lead / Contacted / Proposal Sent / Negotiation / Won / Lost ("qualified" rejected by the API,
++legacy rows still readable and movable forward); null/blank title or stage -> 422 (was 500); lead can be unlinked from its contact; contact picker searches on the server
++(was capped at 100); lead-note creation audited; CEO snapshot failures are logged (class name only); prepare_threshold=None for Supabase pooler compatibility.
++Prepared, NOT applied: db/004_pipeline_stages.sql (+ .rollback.sql). Aborts if any 'qualified' rows exist; never rewrites data.
++Evidence: backend pytest 82 passed; frontend vitest 139 passed; tsc clean; vite build OK.
++
++---
++# Delete (= archive) round (code only; no live DB, no migrations applied)
++Delete is a soft delete (is_archived=true); rows, notes and relationships are kept; archived records are excluded from lists, search, detail and dashboard counts.
++New server-side permission CRM_ARCHIVE_ROLES (default ceo; must also have CRM read access); write access alone cannot delete; denied attempts are audited (crm_archive_denied).
++Audit (existing JSONL sink) now records actor, record_type, record id and timestamp for contact_archived / lead_archived. Permanent deletion is NOT implemented (future approved phase).
++Pending, not applied: db/004_pipeline_stages.sql. No new migration is needed for Delete. Note: the audit trail is a file (audit.jsonl), not a DB table.
++Evidence: backend pytest 88 passed; frontend vitest 143 passed; tsc clean; vite build OK. Not tested against Supabase.
+diff -ruN a/frontend/src/Crm.tsx b/frontend/src/Crm.tsx
+--- a/frontend/src/Crm.tsx	2026-10-26 09:37:56.301405879 +0000
++++ b/frontend/src/Crm.tsx	2026-10-26 09:37:56.306518706 +0000
+@@ -4,27 +4,27 @@
+ const COLS:Record<K,[string,string][]>={contacts:[['full_name','Name'],['email','Email'],['phone','Phone'],['organization','Organization']],leads:[['title','Title'],['contact_name','Contact'],['source','Source'],['value','Value'],['next_follow_up','Follow-up']]}
+ export default function Crm({kind}:{kind:K}){
+  const [rows,setRows]=useState<any[]>([]),[total,setTotal]=useState(0),[page,setPage]=useState(1),[q,setQ]=useState(''),[stage,setStage]=useState(''),[stages,setStages]=useState<string[]>([]),
+-  [can,setCan]=useState(false),[err,setErr]=useState(''),[ok,setOk]=useState(''),[busy,setBusy]=useState(true),[form,setForm]=useState<any|null>(null),[tick,setTick]=useState(0),[people,setPeople]=useState<any[]>([])
+- const size=20,pages=Math.max(1,Math.ceil(total/size)),title=kind==='leads'?'Lead':'Contact'
++  [can,setCan]=useState(false),[err,setErr]=useState(''),[ok,setOk]=useState(''),[busy,setBusy]=useState(true),[form,setForm]=useState<any|null>(null),[tick,setTick]=useState(0),[people,setPeople]=useState<any[]>([]),[canDel,setCanDel]=useState(false),[labels,setLabels]=useState<Record<string,string>>({}),[pq,setPq]=useState('')
++ const lab=(s:string)=>labels[s]??(s==='qualified'?'Qualified (legacy)':s),opts=(cur:string)=>stages.includes(cur)?stages:[cur,...stages],size=20,pages=Math.max(1,Math.ceil(total/size)),title=kind==='leads'?'Lead':'Contact'
+  useEffect(()=>{setBusy(true);const t=setTimeout(()=>{api.call(`/crm/${kind}?page=${page}&page_size=${size}&q=${encodeURIComponent(q)}${stage?`&stage=${stage}`:''}`,'GET')
+-  .then(r=>{setRows(r.items);setTotal(r.total);setCan(r.can_write);setStages(r.stages||[]);setErr('')}).catch(e=>setErr(e.message)).finally(()=>setBusy(false))},q?250:0);return()=>clearTimeout(t)},[kind,page,q,stage,tick])
+- useEffect(()=>{if(kind==='leads')api.call('/crm/contacts?page_size=100','GET').then(r=>setPeople(r.items)).catch(()=>{})},[kind])
+- async function save(e:FormEvent){e.preventDefault();setOk('');setErr('');const b:any={};FIELDS[kind].forEach(([k,,t])=>{const v=form[k];if(v!==undefined&&v!=='')b[k]=t==='number'?Number(v):v;else if(form.id&&v==='')b[k]=null});if(kind==='leads'&&form.contact_id)b.contact_id=form.contact_id
++  .then(r=>{setRows(r.items);setTotal(r.total);setCan(r.can_write);setCanDel(!!r.can_archive);setStages(r.stages||[]);setLabels(r.stage_labels||{});setErr('')}).catch(e=>setErr(e.message)).finally(()=>setBusy(false))},q?250:0);return()=>clearTimeout(t)},[kind,page,q,stage,tick])
++ useEffect(()=>{if(kind!=='leads'||!form)return;const t=setTimeout(()=>{api.call(`/crm/contacts?page_size=50&q=${encodeURIComponent(pq)}`,'GET').then(r=>setPeople(r.items)).catch(()=>{})},pq?250:0);return()=>clearTimeout(t)},[kind,!!form,pq])
++ async function save(e:FormEvent){e.preventDefault();setOk('');setErr('');const b:any={};FIELDS[kind].forEach(([k,,t])=>{const v=form[k];if(v!==undefined&&v!=='')b[k]=t==='number'?Number(v):v;else if(form.id&&v==='')b[k]=null});if(kind==='leads'){if(form.contact_id)b.contact_id=form.contact_id;else if(form.id&&form.contact_id==='')b.contact_id=null}
+   try{await api.call(`/crm/${kind}${form.id?'/'+form.id:''}`,form.id?'PATCH':'POST',b);setOk(`${title} saved.`);setForm(null);setTick(tick+1)}catch(x:any){setErr(x.message)}}
+- async function archive(r:any){if(!window.confirm(`Archive this ${title.toLowerCase()}?`))return;setOk('');try{await api.call(`/crm/${kind}/${r.id}`,'DELETE');setOk(`${title} archived.`);setTick(tick+1)}catch(x:any){setErr(x.message)}}
++ async function archive(r:any){if(!window.confirm(`Delete this ${title.toLowerCase()}? It will be archived: hidden from the lists, with its data and history kept. Permanent deletion is not available.`))return;setOk('');try{await api.call(`/crm/${kind}/${r.id}`,'DELETE');setOk(`${title} deleted (archived).`);setTick(tick+1)}catch(x:any){setErr(x.message)}}
+  async function move(r:any,to:string){setOk('');setErr('');const b:any={stage:to};if(to==='lost'){const why=window.prompt('Reason for losing this lead');if(!why){setTick(tick+1);return}b.lost_reason=why}
+   try{await api.call(`/crm/leads/${r.id}`,'PATCH',b);setOk('Stage updated.')}catch(x:any){setErr(x.message)}setTick(t=>t+1)}
+- return <div className="panel" style={{minHeight:0}}><h3>{kind==='leads'?'Leads & Pipeline':'CRM & Contacts'}{can&&<button className="btn" onClick={()=>{setForm({});setErr('');setOk('')}}>Add {title.toLowerCase()}</button>}</h3>
++ return <div className="panel" style={{minHeight:0}}><h3>{kind==='leads'?'Leads & Pipeline':'CRM & Contacts'}{can&&<button className="btn" onClick={()=>{setForm({});setPq('');setErr('');setOk('')}}>Add {title.toLowerCase()}</button>}</h3>
+   <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:8}}><input className="search" aria-label={`Search ${kind}`} placeholder={`Search ${kind}…`} value={q} onChange={e=>{setQ(e.target.value);setPage(1)}}/>
+-   {kind==='leads'&&<select className="search" aria-label="Filter by stage" style={{maxWidth:180}} value={stage} onChange={e=>{setStage(e.target.value);setPage(1)}}><option value="">All stages</option>{stages.map(s=><option key={s}>{s}</option>)}</select>}</div>
++   {kind==='leads'&&<select className="search" aria-label="Filter by stage" style={{maxWidth:180}} value={stage} onChange={e=>{setStage(e.target.value);setPage(1)}}><option value="">All stages</option>{stages.map(s=><option key={s} value={s}>{lab(s)}</option>)}</select>}</div>
+   {err&&<div className="err" role="alert">{err}</div>}{ok&&<div role="status" className="note" style={{color:'var(--green)'}}>{ok}</div>}
+   {form&&<form onSubmit={save} className="card" style={{width:'100%',margin:'8px 0',boxShadow:'none',border:'1px solid var(--line)'}} aria-label={`${form.id?'Edit':'Add'} ${title.toLowerCase()}`}>
+    {FIELDS[kind].map(([k,l,t])=><div key={k}><label htmlFor={'f_'+k}>{l}</label><input id={'f_'+k} type={t==='number'?'number':t==='date'?'date':'text'} value={form[k]??''} onChange={e=>setForm({...form,[k]:e.target.value})}/></div>)}
+-   {kind==='leads'&&<div><label htmlFor="f_contact">Contact</label><select id="f_contact" value={form.contact_id??''} onChange={e=>setForm({...form,contact_id:e.target.value})}><option value="">None</option>{people.map(p=><option key={p.id} value={p.id}>{p.full_name}</option>)}</select></div>}
++   {kind==='leads'&&<div><label htmlFor="f_contact_q">Find contact</label><input id="f_contact_q" type="text" placeholder="Type to search contacts…" value={pq} onChange={e=>setPq(e.target.value)}/><label htmlFor="f_contact">Contact</label><select id="f_contact" value={form.contact_id??''} onChange={e=>setForm({...form,contact_id:e.target.value})}><option value="">None</option>{[...(form.contact_id&&!people.some(p=>p.id===form.contact_id)?[{id:form.contact_id,full_name:form.contact_name||'Linked contact'}]:[]),...people].map(p=><option key={p.id} value={p.id}>{p.full_name}</option>)}</select></div>}
+    <button className="go">Save</button> <button type="button" className="ghost" onClick={()=>setForm(null)}>Cancel</button></form>}
+-  <div className="tw"><table><thead><tr>{COLS[kind].map(([,l])=><th key={l}>{l}</th>)}{kind==='leads'&&<th>Stage</th>}{can&&<th>Actions</th>}</tr></thead>
++  <div className="tw"><table><thead><tr>{COLS[kind].map(([,l])=><th key={l}>{l}</th>)}{kind==='leads'&&<th>Stage</th>}{(can||canDel)&&<th>Actions</th>}</tr></thead>
+    <tbody>{rows.map(r=><tr key={r.id}>{COLS[kind].map(([k])=><td key={k}>{r[k]??''}</td>)}
+-    {kind==='leads'&&<td>{can&&r.stage!=='won'&&r.stage!=='lost'?<select aria-label={`Stage of ${r.title}`} value={r.stage} onChange={e=>move(r,e.target.value)}>{stages.map(s=><option key={s}>{s}</option>)}</select>:r.stage}</td>}
+-    {can&&<td><button className="ghost" onClick={()=>{setForm({...r});setErr('');setOk('')}}>Edit</button> <button className="ghost" onClick={()=>archive(r)}>Archive</button></td>}</tr>)}</tbody></table>
++    {kind==='leads'&&<td>{can&&r.stage!=='won'&&r.stage!=='lost'?<select aria-label={`Stage of ${r.title}`} value={r.stage} onChange={e=>move(r,e.target.value)}>{opts(r.stage).map(s=><option key={s} value={s}>{lab(s)}</option>)}</select>:lab(r.stage)}</td>}
++    {(can||canDel)&&<td>{can&&<button className="ghost" onClick={()=>{setForm({...r});setPq('');setErr('');setOk('')}}>Edit</button>} {canDel&&<button className="ghost" onClick={()=>archive(r)}>Delete</button>}</td>}</tr>)}</tbody></table>
+    {busy&&<p className="note">Loading…</p>}{!busy&&!rows.length&&!err&&<p className="note">No {kind} found.{can?` Use "Add ${title.toLowerCase()}" to create the first one.`:''}</p>}</div>
+   <div style={{display:'flex',gap:8,alignItems:'center'}}><button className="ghost" disabled={page<=1} onClick={()=>setPage(page-1)}>Previous</button><span className="note">Page {page} of {pages} · {total} total</span><button className="ghost" disabled={page>=pages} onClick={()=>setPage(page+1)}>Next</button></div></div>}
+diff -ruN a/frontend/src/app.render.test.tsx b/frontend/src/app.render.test.tsx
+--- a/frontend/src/app.render.test.tsx	2026-10-26 09:37:56.301221180 +0000
++++ b/frontend/src/app.render.test.tsx	2026-10-26 09:37:56.306564881 +0000
+@@ -27,9 +27,9 @@
+    LAYOUT[r].rows.flat().forEach(p=>expect(screen.getByRole('heading',{name:p.t})).toBeTruthy())})})
+  it('CTO marks monitoring-backed KPIs as Not configured',async()=>{mock('cto',{},['monitoring','billing']);open('/cto')
+   await waitFor(()=>expect(screen.getAllByText('Not configured').length).toBeGreaterThanOrEqual(3))})
+- it('CEO funnel has six stages and startup grid has nine metrics',async()=>{mock('ceo');const {container}=open('/ceo');await screen.findByRole('heading',{level:1})
+-  expect(container.querySelectorAll('.funnel .fr')).toHaveLength(6);expect(container.querySelectorAll('.mgrid > div')).toHaveLength(9);expect(container.querySelectorAll('.mapw svg path').length).toBeGreaterThan(30)})
+- it('funnel and map show supplied values (no invented data when absent)',async()=>{mock('ceo',{pipeline:[{name:'New Leads',value:40},{name:'Won',value:5}],cities:[{name:'Vizag',state:'Andhra Pradesh',value:9}],startup:[{name:'NPS',value:'72'}]});const {container}=open('/ceo')
++ it('CEO funnel has five stages (New Lead, Contacted, Proposal Sent, Negotiation, Won) and startup grid has nine metrics',async()=>{mock('ceo');const {container}=open('/ceo');await screen.findByRole('heading',{level:1})
++  expect(container.querySelectorAll('.funnel .fr')).toHaveLength(5);expect(container.querySelectorAll('.mgrid > div')).toHaveLength(9);expect(container.querySelectorAll('.mapw svg path').length).toBeGreaterThan(30)})
++ it('funnel and map show supplied values (no invented data when absent)',async()=>{mock('ceo',{pipeline:[{name:'New Lead',value:40},{name:'Won',value:5}],cities:[{name:'Vizag',state:'Andhra Pradesh',value:9}],startup:[{name:'NPS',value:'72'}]});const {container}=open('/ceo')
+   await screen.findByText('Vizag');expect(within(container).getByText('72')).toBeTruthy();expect(container.querySelector('.funnel')!.textContent).toContain('40')})})
+ describe('navigation and shell',()=>{
+  it('sidebar item routes to a module page',async()=>{mock('ceo');open('/ceo');await screen.findByRole('heading',{level:1});const item=NAV.ceo[1][1][1]
+diff -ruN a/frontend/src/crm.render.test.tsx b/frontend/src/crm.render.test.tsx
+--- a/frontend/src/crm.render.test.tsx	2026-10-26 09:37:56.300736565 +0000
++++ b/frontend/src/crm.render.test.tsx	2026-10-26 09:37:56.306478880 +0000
+@@ -2,7 +2,7 @@
+ import {describe,it,expect,vi,beforeEach,afterEach} from 'vitest'
+ import {render,screen,cleanup,waitFor} from '@testing-library/react'; import userEvent from '@testing-library/user-event'
+ import Crm from './Crm'
+-const list={items:[{id:'1',full_name:'Asha Rao',email:'asha@abc.test',phone:'',organization:'ABC Logistics'}],total:1,page:1,page_size:20,can_write:true,stages:[]}
++const list={items:[{id:'1',full_name:'Asha Rao',email:'asha@abc.test',phone:'',organization:'ABC Logistics'}],total:1,page:1,page_size:20,can_write:true,can_archive:true,stages:[]}
+ let calls:any[]; let post:{status:number,body:any}
+ beforeEach(()=>{document.cookie='csrf=tok123';calls=[];post={status:201,body:{id:'2'}}
+  vi.stubGlobal('fetch',vi.fn(async(url:string,o:any={})=>{calls.push({url,o});const m=o.method||'GET';const r=m==='GET'?{status:200,body:list}:post;return {ok:r.status<400,status:r.status,json:async()=>r.body}}))})
+@@ -16,7 +16,33 @@
+  it('sends the CSRF token on save, and reports success only after the server confirms',async()=>{render(<Crm kind="contacts"/>)
+   await userEvent.click(await screen.findByRole('button',{name:'Add contact'}));await userEvent.type(screen.getByLabelText('Name *'),'New Person');await userEvent.click(screen.getByRole('button',{name:'Save'}))
+   expect(await screen.findByText('Contact saved.')).toBeTruthy();const p=calls.find(c=>c.o.method==='POST');expect(p.o.headers['X-CSRF-Token']).toBe('tok123');expect(JSON.parse(p.o.body).full_name).toBe('New Person')})
+- it('hides write controls for read-only users',async()=>{vi.stubGlobal('fetch',vi.fn(async()=>({ok:true,status:200,json:async()=>({...list,can_write:false})})));render(<Crm kind="contacts"/>);await screen.findByText('Asha Rao')
+-  expect(screen.queryByRole('button',{name:'Add contact'})).toBeNull();expect(screen.queryByRole('button',{name:'Archive'})).toBeNull()})
+- it('archive asks for confirmation first',async()=>{const c=vi.spyOn(window,'confirm').mockReturnValue(false);render(<Crm kind="contacts"/>);await userEvent.click(await screen.findByRole('button',{name:'Archive'}))
++ it('hides write controls for read-only users',async()=>{vi.stubGlobal('fetch',vi.fn(async()=>({ok:true,status:200,json:async()=>({...list,can_write:false,can_archive:false})})));render(<Crm kind="contacts"/>);await screen.findByText('Asha Rao')
++  expect(screen.queryByRole('button',{name:'Add contact'})).toBeNull();expect(screen.queryByRole('button',{name:'Delete'})).toBeNull()})
++ it('delete asks for confirmation first',async()=>{const c=vi.spyOn(window,'confirm').mockReturnValue(false);render(<Crm kind="contacts"/>);await userEvent.click(await screen.findByRole('button',{name:'Delete'}))
+   expect(c).toHaveBeenCalled();expect(calls.some(x=>x.o.method==='DELETE')).toBe(false)})})
++describe('CRM leads page (regressions)',()=>{
++ const leads={items:[{id:'L1',title:'10 e-vans',contact_name:'Asha Rao',contact_id:'C1',source:'web',value:'100',next_follow_up:null,stage:'qualified'},{id:'L2',title:'Won deal',stage:'won'}],total:2,page:1,page_size:20,can_write:true,stages:['new','contacted','proposal','negotiation','won','lost'],stage_labels:{new:'New Lead',contacted:'Contacted',proposal:'Proposal Sent',negotiation:'Negotiation',won:'Won',lost:'Lost'}}
++ beforeEach(()=>{vi.stubGlobal('fetch',vi.fn(async(url:string,o:any={})=>{calls.push({url,o});const m=o.method||'GET';return {ok:true,status:200,json:async()=>m==='GET'?(String(url).includes('/crm/leads')?leads:list):{id:'L1'}}}))})
++ it('shows the decided stage names and keeps a legacy stage visible instead of blanking it',async()=>{render(<Crm kind="leads"/>);await screen.findByText('10 e-vans')
++  expect(screen.getAllByRole('option',{name:'Proposal Sent'}).length).toBeGreaterThan(0);expect(screen.queryByRole('option',{name:'Qualified'})).toBeNull()
++  expect((screen.getByLabelText('Stage of 10 e-vans') as HTMLSelectElement).value).toBe('qualified');expect(screen.getByRole('option',{name:'Qualified (legacy)'})).toBeTruthy()})
++ it('does not fetch a fixed first-100 contact list; the picker searches on the server',async()=>{render(<Crm kind="leads"/>);await screen.findByText('10 e-vans')
++  expect(calls.some(c=>String(c.url).includes('page_size=100'))).toBe(false)
++  await userEvent.click(screen.getAllByRole('button',{name:'Edit'})[0]);await userEvent.type(screen.getByLabelText('Find contact'),'abc')
++  await waitFor(()=>expect(calls.some(c=>String(c.url).includes('/crm/contacts?page_size=50&q=abc'))).toBe(true))})
++ it('sends contact_id null when the contact is cleared on edit',async()=>{render(<Crm kind="leads"/>);await screen.findByText('10 e-vans')
++  await userEvent.click(screen.getAllByRole('button',{name:'Edit'})[0]);await userEvent.selectOptions(screen.getByLabelText('Contact'),'');await userEvent.click(screen.getByRole('button',{name:'Save'}))
++  await waitFor(()=>expect(calls.some(c=>c.o.method==='PATCH')).toBe(true));expect(JSON.parse(calls.find(c=>c.o.method==='PATCH').o.body).contact_id).toBeNull()})})
++
++describe('Delete (archive) in the UI',()=>{
++ const mk2=(over:any)=>vi.stubGlobal('fetch',vi.fn(async(url:string,o:any={})=>{calls.push({url,o});const m=o.method||'GET';return {ok:true,status:200,json:async()=>m==='GET'?(String(url).includes('/crm/leads')?{items:[{id:'L1',title:'Deal',stage:'new'}],total:1,stages:['new'],stage_labels:{},can_write:true,can_archive:true,...over}:{...list,...over}):{ok:true}}}))
++ it('confirmed delete sends DELETE with the CSRF token and says archived',async()=>{mk2({});vi.spyOn(window,'confirm').mockReturnValue(true);render(<Crm kind="contacts"/>)
++  await userEvent.click(await screen.findByRole('button',{name:'Delete'}));expect(await screen.findByText('Contact deleted (archived).')).toBeTruthy()
++  const d=calls.find(c=>c.o.method==='DELETE');expect(d.url).toContain('/crm/contacts/1');expect(d.o.headers['X-CSRF-Token']).toBe('tok123')})
++ it('the confirmation text says it is an archive, not a permanent delete',async()=>{mk2({});const c=vi.spyOn(window,'confirm').mockReturnValue(false);render(<Crm kind="leads"/>)
++  await userEvent.click(await screen.findByRole('button',{name:'Delete'}));expect(String(c.mock.calls[0][0])).toMatch(/archived/i);expect(calls.some(x=>x.o.method==='DELETE')).toBe(false)})
++ it('Delete is hidden when the server says the user cannot archive, even if they can edit',async()=>{mk2({can_archive:false});render(<Crm kind="leads"/>)
++  await screen.findByText('Deal');expect(screen.queryByRole('button',{name:'Delete'})).toBeNull();expect(screen.getByRole('button',{name:'Edit'})).toBeTruthy()})
++ it('shows the server error when delete is refused (409 open leads)',async()=>{vi.stubGlobal('fetch',vi.fn(async(url:string,o:any={})=>{const m=o.method||'GET';return m==='GET'?{ok:true,status:200,json:async()=>list}:{ok:false,status:409,json:async()=>({detail:'This contact has open leads. Close or archive them first.'})}}))
++  vi.spyOn(window,'confirm').mockReturnValue(true);render(<Crm kind="contacts"/>);await userEvent.click(await screen.findByRole('button',{name:'Delete'}))
++  expect(await screen.findByText('This contact has open leads. Close or archive them first.')).toBeTruthy();expect(screen.queryByText('Contact deleted (archived).')).toBeNull()})})
+diff -ruN a/frontend/src/nav.ts b/frontend/src/nav.ts
+--- a/frontend/src/nav.ts	2026-10-26 09:37:56.301153973 +0000
++++ b/frontend/src/nav.ts	2026-10-26 09:37:56.306465191 +0000
+@@ -32,7 +32,7 @@
+  cto:{'System Health':['health','apiLatency','services'],Infrastructure:['usage','dbPerf'],Integrations:['integrations'],Projects:['projects'],'R&D & AI':['insights'],'Tech Team':['team'],Security:['security','incidents'],Reports:[]}}
+ export const COLS:Record<string,string[]>={renewals:['Vehicle','Renewal type','Due date','Status'],inventory:['Part','Stock','Status'],centers:['Location','Tickets','Completed','SLA','Status'],procurement:['Item','Requester','Amount','Status'],ongoing:['Ticket','Vehicle','Priority','Status'],services:['Service','Status','Uptime'],incidents:['Incident','Status','Time']}
+ export const METRICS:Record<string,string[]>={startup:['Burn Rate','Cash Runway','CAC','LTV','LTV/CAC','Monthly Growth','Churn Rate','NPS','Repeat Service Rate'],health:['APIs','Database','Frontend','Mobile App'],usage:['CPU','Memory','Storage','Network'],security:['Critical Alerts','Failed Logins','Permission Changes','Active Users']}
+-export const FUNNEL=['New Leads','Contacted','Qualified','Proposal','Negotiation','Won']
++export const FUNNEL=['New Lead','Contacted','Proposal Sent','Negotiation','Won']
+ export const NEEDS_MONITORING=['health','apiLatency','services','usage','dbPerf','incidents']
+ export const KPI_SOURCE:Record<string,string>={'System Uptime':'monitoring','API Health':'monitoring','Infrastructure Cost':'billing'}
+ export const PORTAL_NAMES:Record<string,string>={ceo:'CEO',coo:'COO',cto:'CTO',service_manager:'Service Manager',hr:'HR',technician:'Technician',employee:'Employee'}

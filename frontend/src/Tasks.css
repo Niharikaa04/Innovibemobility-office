@@ -1,0 +1,77 @@
+/* Tasks & Approvals dashboard. Every selector is scoped under .tk or .tk-layer (the side panel is portalled to <body>), so CRM and other modules are unaffected. */
+.tk,.tk-layer{--tk-ink:#0f1f33;--tk-navy:#0b1f45;--tk-muted:#5b6b80;--tk-line:#e3e9f1;--tk-surface:#fff;--tk-soft:#f4f7fb;--tk-track:#e8edf4;
+ --tk-blue:#1b7bf0;--tk-green:#16a34a;--tk-amber:#f59e0b;--tk-red:#ef4444;--tk-violet:#6d5bd0;color:var(--tk-ink)}
+.tk{display:flex;flex-direction:column;gap:16px;padding:4px 0 24px;min-width:0}
+.tk *,.tk *::before,.tk *::after,.tk-layer *,.tk-layer *::before,.tk-layer *::after{box-sizing:border-box}
+.tk :is(h2,h3,p,dl,dd),.tk-layer :is(h3,h4,h5,p,dl,dd){margin:0}
+
+/* header */
+.tk-head{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between}
+.tk-head h2{font-size:1.9rem;line-height:1.15;font-weight:800;color:var(--tk-navy)}.tk-head p{color:var(--tk-muted);margin-top:4px}
+.tk-alert{padding:10px 14px;border-radius:10px;font-size:.92rem}
+.tk-alert--err{background:#fdecec;color:#991b1b;border:1px solid #f8c9c9}.tk-alert--ok{background:#e8f7ee;color:#166534;border:1px solid #bfe6cd}
+
+/* KPI cards (buttons: click to filter) */
+.tk-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}
+.tk-kpi{display:flex;gap:14px;align-items:center;text-align:left;font:inherit;color:inherit;cursor:pointer;background:var(--tk-surface);border:1px solid var(--tk-line);border-radius:14px;padding:16px}
+.tk-kpi:hover{border-color:#bcd3f2}.tk-kpi.is-on{border-color:var(--tk-blue);box-shadow:0 0 0 2px rgba(27,123,240,.18)}
+.tk-kpi>span:last-child{display:flex;flex-direction:column}
+.tk-kpi-i{flex:none;width:48px;height:48px;border-radius:12px;display:grid;place-items:center}
+.tk-tone--green{background:#e3f6ea;color:var(--tk-green)}.tk-tone--amber{background:#fff1da;color:#d97706}.tk-tone--blue{background:#e4f0ff;color:var(--tk-blue)}
+.tk-tone--red{background:#fde8e8;color:var(--tk-red)}.tk-tone--violet{background:#ece9fb;color:var(--tk-violet)}
+.tk-kpi-l{font-size:.85rem;color:var(--tk-muted)}.tk-kpi-v{font-size:1.7rem;font-weight:800;line-height:1.2}.tk-kpi-s{font-size:.78rem;color:var(--tk-muted)}
+
+/* cards, filters */
+.tk-card{background:var(--tk-surface);border:1px solid var(--tk-line);border-radius:14px;padding:16px;min-width:0;box-shadow:0 1px 2px rgba(15,31,51,.04)}
+.tk-filters{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.tk-in,.tk-form :is(input[type=text],input[type=date],select,textarea){font:inherit;padding:9px 12px;border:1px solid var(--tk-line);border-radius:10px;background:var(--tk-surface);color:var(--tk-ink);max-width:100%}
+.tk-search{flex:1 1 220px;min-width:180px}
+.tk-toggle,.tk-check{display:inline-flex;gap:8px;align-items:center;font-size:.9rem;color:var(--tk-ink)}
+.tk-fine{color:var(--tk-muted);font-size:.84rem;margin-bottom:8px}.tk-empty{color:var(--tk-muted);font-size:.92rem;padding:14px 4px}
+
+/* buttons */
+.tk-btn{font:inherit;font-weight:600;border:1px solid transparent;border-radius:10px;padding:10px 16px;cursor:pointer;background:var(--tk-soft);color:var(--tk-ink)}
+.tk-btn:disabled{opacity:.5;cursor:not-allowed}.tk-btn--sm{padding:6px 12px;font-size:.85rem}
+.tk-btn--primary{background:var(--tk-blue);color:#fff}.tk-btn--ok{background:var(--tk-green);color:#fff}
+.tk-btn--line{background:var(--tk-surface);border-color:#bcd3f2;color:#1456a8}.tk-btn--danger{background:var(--tk-surface);border-color:#f3c0c0;color:#b42323}
+.tk-btn--link{background:none;color:#1456a8;padding:6px 8px;text-decoration:underline}
+.tk :is(button,input,select,textarea,summary):focus-visible,.tk-layer :is(button,input,select,textarea):focus-visible,.tk-panel:focus-visible{outline:3px solid var(--tk-blue);outline-offset:2px}
+
+/* table */
+.tk-scroll{overflow-x:auto}.tk-table{width:100%;border-collapse:collapse;font-size:.9rem}
+.tk-table th{text-align:left;font-weight:700;padding:10px;border-bottom:1px solid var(--tk-line);white-space:nowrap;color:var(--tk-navy)}
+.tk-table td{padding:11px 10px;border-bottom:1px solid #eef2f7;vertical-align:middle}.tk-table td small{color:var(--tk-muted)}
+.tk-title{font:inherit;font-weight:600;color:var(--tk-navy);background:none;border:0;padding:0;cursor:pointer;text-align:left}.tk-title:hover{text-decoration:underline}
+.tk-who{display:inline-flex;gap:8px;align-items:center}
+.tk-avatar{width:28px;height:28px;border-radius:50%;background:#dbe9fd;color:#1456a8;font-size:.72rem;font-weight:700;display:grid;place-items:center;flex:none}
+.tk-due.is-late{color:#b42323;font-weight:600}.tk-due small{font-weight:500}
+.tk-actions{display:flex;gap:8px;flex-wrap:wrap}
+.tk-pager{display:flex;gap:12px;align-items:center;justify-content:flex-end;margin-top:12px;font-size:.88rem;color:var(--tk-muted);flex-wrap:wrap}
+
+/* badges (the status <select> is styled as a badge so it stays one accessible control) */
+.tk-badge{display:inline-block;padding:3px 10px;border-radius:6px;font-size:.78rem;font-weight:600;white-space:nowrap}
+.tk-badge-select{font-family:inherit;border:0;cursor:pointer;padding:4px 8px}
+.tk-badge--info{background:#e4f0ff;color:#1456a8}.tk-badge--blue{background:#dbe9fd;color:#0f4fa8}.tk-badge--amber{background:#fff1da;color:#92520a}
+.tk-badge--green{background:#e3f6ea;color:#166534}.tk-badge--red{background:#fde8e8;color:#991b1b}.tk-badge--grey{background:var(--tk-track);color:var(--tk-muted)}
+
+/* side panel */
+.tk-layer{position:fixed;inset:0;z-index:1000}
+.tk-backdrop{position:absolute;inset:0;background:rgba(11,31,69,.45)}
+.tk-panel{position:absolute;top:0;right:0;bottom:0;width:min(480px,100vw);background:var(--tk-surface);display:flex;flex-direction:column;box-shadow:-8px 0 30px rgba(11,31,69,.2)}
+.tk-panel-h{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;background:linear-gradient(180deg,#e4eefc,#f4f8fe);border-bottom:1px solid var(--tk-line)}
+.tk-panel-h h3{font-size:1.1rem;color:var(--tk-navy)}
+.tk-x{font:inherit;font-size:1.5rem;line-height:1;border:0;background:none;cursor:pointer;color:var(--tk-muted);padding:4px 10px;border-radius:8px}
+.tk-panel-b{padding:20px;overflow-y:auto;display:flex;flex-direction:column;gap:14px}
+.tk-dt{font-size:1.2rem;color:var(--tk-navy)}.tk-chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.tk-dl{display:grid;grid-template-columns:auto 1fr;gap:10px 16px;padding:14px;background:var(--tk-soft);border-radius:12px;font-size:.9rem}.tk-dl dt{color:var(--tk-muted)}.tk-dl dd{font-weight:600}
+.tk-panel h5{font-size:.85rem;color:var(--tk-muted)}.tk-desc{white-space:pre-wrap;overflow-wrap:anywhere}
+.tk-form{display:flex;flex-direction:column;gap:14px}.tk-form label:not(.tk-check){display:block;font-size:.82rem;color:var(--tk-muted);margin-bottom:4px}
+.tk-form :is(input[type=text],input[type=date],select,textarea){width:100%}.tk-form textarea{resize:vertical}
+.tk-form-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+
+/* responsive: table rows become cards on narrow screens */
+@media (max-width:760px){.tk-head h2{font-size:1.5rem}.tk-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+ .tk-table,.tk-table tbody,.tk-table tr,.tk-table td{display:block;width:100%}.tk-table tr{padding:10px 4px;border-bottom:1px solid var(--tk-line)}
+ .tk-table td{border:0;padding:4px 6px;display:flex;gap:10px;justify-content:space-between;align-items:center}
+ .tk-table td::before{content:attr(data-label);color:var(--tk-muted);font-size:.78rem;flex:none}.tk-form-2{grid-template-columns:1fr}.tk-pager{justify-content:space-between}}
+@media (prefers-reduced-motion:reduce){.tk *,.tk-layer *{transition:none!important;animation:none!important}}

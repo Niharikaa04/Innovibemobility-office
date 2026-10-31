@@ -1,0 +1,1 @@
+drop index if exists office_dashboard.module_records_campaign_title_uq;

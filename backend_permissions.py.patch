@@ -1,0 +1,13 @@
+--- a/backend/permissions.py
++++ b/backend/permissions.py
+@@ -24,8 +24,8 @@
+     "cto": set().union(*[_p(m, *RO) for m in ("integrations", "iot", "diagnostics", "fleet", "tickets", "reports")],
+         _p("audit", "read"), _p("tasks", "read", "write")),
+     "service_manager": set().union(
+-        _p("tickets", "read", "write", "approve", "export"), _p("fleet", "read", "write", "export"), _p("garages", "read", "write"),
+-        _p("technicians", "read", "write"), _p("diagnostics", "read", "write"), _p("iot", "read"),
++        _p("tickets", "read", "write", "approve", "export"), _p("fleet", "read", "write", "export"), _p("garages", "read", "write", "export"),
++        _p("technicians", "read", "write", "export"), _p("diagnostics", "read", "write", "export"), _p("iot", "read", "export"),
+         _p("customers", "read"), _p("tasks", "read", "write"), _p("attendance", "read"), _p("reports", "read")),
+     "hr": set().union(
+         _p("employees", "read", "write", "export"), _p("attendance", "read", "write", "approve", "export"),

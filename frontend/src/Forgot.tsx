@@ -1,0 +1,4 @@
+import {useState,FormEvent} from 'react'; import {Link} from 'react-router-dom'; import {api} from './api'
+export default function Forgot(){const [v,setV]=useState(''),[msg,setMsg]=useState(''),[busy,setBusy]=useState(false)
+ async function go(e:FormEvent){e.preventDefault();setBusy(true);try{setMsg((await api.forgot(v.trim())).message)}catch(x:any){setMsg(x.message)}finally{setBusy(false)}}
+ return <div className="lside" style={{minHeight:'100vh'}}><div className="card"><h2>Reset password</h2><p className="s">Enter your username or email.</p><form onSubmit={go}><label htmlFor="f">Username or Email</label><input id="f" type="text" value={v} onChange={e=>setV(e.target.value)}/><button className="go" disabled={busy||!v.trim()}>Request reset</button></form>{msg&&<div className="err" role="status" style={{background:'var(--bg)',color:'var(--ink)'}}>{msg}</div>}<p style={{textAlign:'center'}}><Link to="/login">Back to sign in</Link></p></div></div>}

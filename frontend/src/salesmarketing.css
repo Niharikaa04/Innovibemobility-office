@@ -1,0 +1,13 @@
+/* Sales & Marketing only. Scoped under .ops; reuses the Operations tokens (--o-*) from ops.css. */
+.ops .sm-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.ops .sm-charts>.ops-card{min-width:0}
+.ops .sm-charts h3{margin:0 0 8px}
+.ops .sm-plot{height:260px;min-width:0}
+.ops .sm-empty{display:grid;place-items:center;height:260px;color:var(--o-mut,#64748b);font-size:13px;text-align:center}
+.ops .sm-form{margin:0}
+.ops .sm-sec{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.ops td small{display:block;color:#64748b}
+.ops .badge:is(.APPROVED,.WON){--c:var(--o-g)}
+.ops .badge:is(.BLOCKED,.LOST){--c:var(--o-r)}
+.ops .badge:is(.CANCELLED){--c:var(--o-n)}
+@media (max-width:900px){.ops .sm-charts{grid-template-columns:minmax(0,1fr)}}

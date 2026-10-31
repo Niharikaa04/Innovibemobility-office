@@ -1,0 +1,24 @@
+/* Leads & Pipeline only. Everything is scoped to .iv-leads (or uses new iv-s* / iv-fups classes) so CRM & Contacts is unaffected. */
+.iv-leads .iv-kpis6{grid-template-columns:repeat(6,minmax(0,1fr))}
+@media (max-width:1280px){.iv-leads .iv-kpis6{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:640px){.iv-leads .iv-kpis6{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.iv-leads .iv-hint{font-size:11px;color:#64748b;min-height:14px;margin-top:3px}
+.iv-leads .iv-suggest-wrap{position:relative}
+.iv-leads .iv-suggest{position:absolute;z-index:20;left:0;right:0;top:100%;margin:2px 0 0;padding:4px;list-style:none;background:#fff;border:1px solid #dbe4f0;border-radius:10px;box-shadow:0 8px 24px rgba(15,23,42,.12);max-height:220px;overflow:auto}
+.iv-leads .iv-suggest button{display:block;width:100%;text-align:left;background:none;border:0;border-radius:8px;padding:7px 10px;font:inherit;color:#0f2342;cursor:pointer}
+.iv-leads .iv-suggest button:hover,.iv-leads .iv-suggest button:focus-visible{background:#eff6ff}
+.iv-leads .iv-suggest small{display:block;color:#64748b;font-size:11px}
+.iv-leads input[readonly]{background:#f1f5f9;color:#475569}
+.iv-spill{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.iv-spill.s-new{background:#dbeafe;color:#1d4ed8}.iv-spill.s-contacted{background:#e0f2fe;color:#0369a1}.iv-spill.s-in_discussion{background:#fef3c7;color:#b45309}
+.iv-spill.s-proposal{background:#ede9fe;color:#6d28d9}.iv-spill.s-converted{background:#d1fae5;color:#047857}.iv-spill.s-lost{background:#fee2e2;color:#b91c1c}
+.iv-fups{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.iv-fups li{display:grid;grid-template-columns:34px 1fr auto;gap:10px;align-items:center}
+.iv-fups b{display:block;font-size:13px;color:#0f2342}.iv-fups small{display:block;color:#64748b;font-size:12px}
+.iv-fups .iv-av{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:#dbeafe;color:#1d4ed8;font-weight:700;font-size:12px}
+.iv-fups time{font-size:12px;font-weight:600;white-space:nowrap}
+.iv-fups time.late{color:#dc2626}.iv-fups time.soon{color:#d97706}.iv-fups time.ok{color:#059669}
+.iv-leads .iv-sub{margin:14px 0 6px;font-size:13px;color:#0f2342}
+.iv-hist{list-style:none;margin:0;padding:0;display:grid;gap:6px;max-height:200px;overflow:auto;font-size:13px}
+.iv-hist span{display:block;color:#64748b;font-size:11px}
+.iv-check{display:flex;gap:8px;align-items:center;margin-top:10px;font-size:13px}

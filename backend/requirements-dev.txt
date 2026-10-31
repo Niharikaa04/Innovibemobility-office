@@ -1,0 +1,1 @@
+pgserver>=0.1.4   # dev only: disposable local Postgres for tests/test_pg_integration.py

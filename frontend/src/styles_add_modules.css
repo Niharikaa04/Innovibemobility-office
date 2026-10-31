@@ -1,0 +1,60 @@
+/* APPEND to the end of frontend/src/styles.css. Shared design system for CRM / Leads / Customers / Sales / WABA.
+   Uses the existing CSS variables (--navy2, --blue, --card, --line, --mute, --bg) so light/dark themes keep working. */
+.iv-page{display:grid;gap:16px;min-width:0}
+.iv-head{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap}
+.iv-head h1{margin:0;font-size:28px}.iv-head p{margin:4px 0 0;color:var(--mute);font-size:14px}
+.iv-actions{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+.iv-range{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}
+.iv-range label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--mute)}
+.iv-range input,.iv-filters input,.iv-filters select,.iv-field input,.iv-field select,.iv-field textarea{height:40px;width:100%;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font:inherit;font-size:14px}
+.iv-range input{width:auto}.iv-alltime{align-self:center;color:var(--mute);font-size:13px;padding:0 6px}
+.iv-field textarea{height:auto;min-height:96px;padding:10px 12px;resize:vertical}
+.iv-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:40px;padding:0 16px;border-radius:8px;border:1px solid var(--navy2);background:var(--navy2);color:#fff;font-weight:600;font-size:14px}
+.iv-btn.secondary{background:var(--card);color:var(--ink);border-color:var(--line)}
+.iv-btn:disabled,.ghost:disabled{opacity:.55;cursor:not-allowed}
+.iv-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+.iv-kpi{display:flex;gap:12px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;box-shadow:0 1px 3px #0b1f3a0d;min-height:84px}
+.iv-kpi small{display:block;font-size:12px;font-weight:600}.iv-kpi strong{display:block;font-size:26px;line-height:1.2}.iv-kpi em{font-style:normal;font-size:11px;color:var(--mute)}
+.iv-kpi-ic{flex:none;width:48px;height:48px;border-radius:12px;display:grid;place-items:center}
+.iv-kpi.green .iv-kpi-ic{background:#dcfce7;color:#15803d}.iv-kpi.green small{color:#15803d}
+.iv-kpi.blue .iv-kpi-ic{background:#dbeafe;color:#1d4ed8}.iv-kpi.blue small{color:#1d4ed8}
+.iv-kpi.purple .iv-kpi-ic{background:#ede9fe;color:#6d28d9}.iv-kpi.purple small{color:#6d28d9}
+.iv-kpi.orange .iv-kpi-ic{background:#ffedd5;color:#c2410c}.iv-kpi.orange small{color:#c2410c}
+.iv-kpi.red .iv-kpi-ic{background:#fee2e2;color:#b91c1c}.iv-kpi.red small{color:#b91c1c}
+.iv-kpi.slate .iv-kpi-ic{background:#e2e8f0;color:#334155}.iv-kpi.slate small{color:#334155}
+.iv-split{display:grid;grid-template-columns:minmax(320px,5fr) minmax(0,7fr);gap:16px;align-items:stretch}
+.iv-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;min-width:0}.iv-charts .span2{grid-column:1/-1}
+.iv-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;box-shadow:0 1px 3px #0b1f3a0d;min-width:0;display:flex;flex-direction:column}
+.iv-card h3{margin:0 0 12px;font-size:15px;display:flex;align-items:center;gap:8px}
+.iv-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.iv-field{display:flex;flex-direction:column;gap:5px;min-width:0}.iv-field.wide{grid-column:1/-1}
+.iv-field label{font-size:13px;font-weight:600}.req{color:var(--bad)}
+.iv-ferr{margin:0;font-size:12px;color:var(--bad)}.iv-count{font-size:11px;color:var(--mute);text-align:right}
+.iv-form-actions{grid-column:1/-1;display:flex;gap:10px}.iv-form-actions .iv-btn{flex:1}
+.iv-empty{flex:1;min-height:140px;display:grid;place-items:center;text-align:center;color:var(--mute);font-size:13px;border:1px dashed var(--line);border-radius:8px;padding:16px;background:var(--bg)}
+.iv-donut{display:grid;grid-template-columns:minmax(120px,160px) 1fr;gap:12px;align-items:center}
+.iv-legend{list-style:none;margin:0;padding:0;font-size:13px}.iv-legend li{display:flex;align-items:center;gap:8px;padding:4px 0}.iv-legend b{margin-left:auto}
+.iv-dot{width:9px;height:9px;border-radius:50%;flex:none}
+.iv-bars{list-style:none;margin:0;padding:0;display:grid;gap:10px;font-size:13px}
+.iv-bars li{display:grid;grid-template-columns:minmax(80px,1fr) 2fr 28px;gap:8px;align-items:center}.iv-bars span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.iv-bar{height:8px;border-radius:4px;background:var(--line);overflow:hidden}.iv-bar i{display:block;height:100%;border-radius:4px}.iv-reccount{font-size:13px;color:var(--mute);white-space:nowrap}
+.iv-pg{min-width:34px;height:34px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink)}.iv-pg.on{background:var(--blue);border-color:var(--blue);color:#fff}
+.iv-filters{display:grid;grid-template-columns:minmax(200px,2fr) repeat(2,minmax(140px,1fr)) auto auto auto;gap:10px;align-items:center;margin-bottom:12px}
+.iv-toolbar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.iv-table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px}
+.iv-table{width:100%;border-collapse:collapse;font-size:13px;min-width:720px}
+.iv-table th{background:var(--bg);font-size:12px;color:var(--mute);white-space:nowrap;padding:10px}
+.iv-table td{padding:10px;border-bottom:1px solid var(--line);vertical-align:middle}.iv-table tr:last-child td{border-bottom:0}
+.iv-table th button{all:unset;cursor:pointer;display:inline-flex;gap:4px;align-items:center}.iv-table th button:focus-visible{outline:2px solid var(--blue)}
+.iv-pill{display:inline-block;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:600}
+.iv-pill.customer{background:#dbeafe;color:#1e40af}.iv-pill.partner{background:#ede9fe;color:#5b21b6}.iv-pill.vendor{background:#ffedd5;color:#9a3412}.iv-pill.internal{background:#fee2e2;color:#991b1b}.iv-pill.other{background:#e2e8f0;color:#334155}
+.iv-rowact{display:flex;gap:6px}.iv-icon{width:32px;height:32px;display:grid;place-items:center;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--blue);padding:0}.iv-icon.danger{color:var(--bad)}.iv-icon:disabled{opacity:.5;cursor:not-allowed}
+.iv-pager{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:12px;font-size:13px;color:var(--mute)}
+.iv-ok{background:#dcfce7;color:#166534;padding:8px 12px;border-radius:8px;font-size:13px}
+.iv-modal{position:fixed;inset:0;background:#0b1f3a80;display:grid;place-items:center;padding:16px;z-index:50}
+.iv-modal-box{background:var(--card);border-radius:12px;padding:18px;width:min(520px,100%);max-height:90vh;overflow:auto}
+.iv-modal-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.iv-modal-h h3{margin:0}
+.iv-dl{display:grid;grid-template-columns:120px 1fr;gap:8px 12px;margin:0;font-size:14px}.iv-dl dt{color:var(--mute)}.iv-dl dd{margin:0;word-break:break-word;white-space:pre-wrap}
+@media(max-width:1100px){.iv-split{grid-template-columns:1fr}}
+@media(max-width:800px){.iv-charts{grid-template-columns:1fr}}
+@media(max-width:700px){.iv-form{grid-template-columns:1fr}.iv-filters{grid-template-columns:1fr}.iv-donut{grid-template-columns:1fr}.iv-head h1{font-size:22px}}

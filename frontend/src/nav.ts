@@ -1,0 +1,38 @@
+export const NAV:Record<string,[string,string[]][]>={
+ceo:[['Strategic',['CEO Dashboard','Startup Metrics','KPI Center','Business Overview','Reports & Analytics']],['Business',['CRM & Contacts','Leads & Pipeline','Customers (Fleets/OEMs)','Sales & Marketing','WABA (WhatsApp)','Email','Unified Inbox','Quotations & Orders']],['Operations',['Service Tickets','Fleet Management','Garages & Service Centers','Technicians','EVcare.AI Diagnostics','IoT & Telemetry']],['Finance',['Revenue & Invoices','Expenses','Payments & Receivables','Budget & Forecast']],['People & Office',['Employees','Attendance','Tasks & Approvals','HR & Leave','Documents']],['Administration',['Integrations','Settings','Audit Log']]],
+coo:[['Operations',['COO Dashboard','Service Tickets','Fleet Management','Garages & Service Centers','Technicians','IoT & Telemetry','Spare Parts & Inventory','Procurement','Vehicle Inspections','Renewals & Compliance','Operations Analytics']],['People & Work',['Team Management','Tasks & Approvals','Attendance','HR & Leave','Documents']],['Customers (View)',['Customers (Fleets/OEMs)','Vehicle Directory','Service History']],['Finance (View)',['Expenses','Purchase Requests','Payments & Invoices']],['Systems (View)',['Reports','Knowledge Base']],['Administration',['Settings','Audit Log']]],
+cto:[['Executive',['CTO Dashboard','System Monitoring','Tech Projects','AI & Innovation','Technical Reports']],['Technology',['Infrastructure','APIs & Integrations','Database','Servers & Cloud','DevOps & Deployment','Security & Access','Logs & Audit']],['Product & Development',['Application','Mobile App','IoT & Telemetry','EVcare.AI','R&D Projects']],['Operations',['Service Platform','Technician App','Platform Analytics']],['People & Office',['Tech Team','Tasks & Approvals','Documents','Knowledge Base']],['Administration',['Settings','Integrations','Audit Log']]],
+service_manager:[['Service',['Dashboard','Ticket Queue','Fleet Management','Garages & Service Centers','Technicians','EVcare.AI Diagnostics','IoT & Telemetry','Technician Allocation','Job Cards','Spare-Parts Requests','Quality Checks','Escalations','Reports']]],
+hr:[['People',['Dashboard','Employee Directory','Add Employee','Technicians','Attendance','Leave','Documents','Roles & Access','Audit History']]],
+technician:[['Field work',['My Jobs','Job Cards','EVcare.AI Diagnostics','IoT & Telemetry','Parts Requests','Service History','Tasks','Attendance','Notifications']]],
+employee:[['My work',['My Tasks','Attendance','Leave Requests','Profile','Documents','Announcements','Team Directory']]]}
+export type Panel={k:string;t:string;type:'donut'|'line'|'bar'|'combo'|'funnel'|'table'|'metrics'|'map'|'list';w?:number}
+export interface Layout{title:string;sub:string;kpis:string[];tabs:string[];rows:Panel[][]}
+const P=(k:string,t:string,type:Panel['type'],w=1):Panel=>({k,t,type,w})
+export const LAYOUT:Record<string,Layout>={
+ceo:{title:'CEO Dashboard',sub:"Complete overview of InnoVibe Mobility's business, operations and growth",kpis:['Total Revenue','Gross Margin','Active Customers','Service Tickets','New Leads','Cash Balance'],tabs:['Overview','Financial','Customers','Operations','Sales & Marketing','People','AI Insights'],rows:[
+ [P('revenue','Revenue, Expense & Profit Trend','combo'),P('growth','Customer Growth','line'),P('ticketStatus','Service Ticket Status','donut')],
+ [P('startup','Startup Metrics','metrics'),P('pipeline','Leads Pipeline','funnel'),P('cities','Top Cities by Service Tickets','map')],
+ [P('activities','Recent Activities','list'),P('approvals','Pending Approvals','list'),P('messages','Unread Messages','list'),P('insights','AI Insights','list')]]},
+coo:{title:'COO Dashboard',sub:'Operational control of service, fleet, technicians and inventory',kpis:['Total Vehicles','Active Service Tickets','Completed Services','Technicians on Field','Spare Parts in Stock','Pending Procurement'],tabs:['Overview','Service Operations','Fleet & Vehicles','Technicians','Inventory & Procurement','Service Centers','Team & Tasks','Reports'],rows:[
+ [P('ticketStatus','Service Ticket Status','donut'),P('ticketTrend','Service Tickets Trend','line'),P('fleetStatus','Fleet Status','donut')],
+ [P('renewals','Vehicle Service Renewals','table'),P('workload','Technician Workload','bar'),P('inventory','Inventory Status','table')],
+ [P('centers','Service Centers Performance','table'),P('procurement','Procurement Requests','table'),P('ongoing','Ongoing Service Tickets','table')],
+ [P('tasks','Team Tasks & Approvals','list'),P('activity','Recent Operational Activity','list'),P('insights','Operational Insights','list')]]},
+cto:{title:'CTO Dashboard',sub:'Technology. Innovation. Reliability.',kpis:['System Uptime','API Health','Active Users','Open Incidents','Tech Projects','Infrastructure Cost'],tabs:['Overview','System Health','Infrastructure','Integrations','Projects','R&D & AI','Tech Team','Security','Reports'],rows:[
+ [P('health','System Health Overview','metrics'),P('apiLatency','API Response Time','line'),P('services','Service Status','table')],
+ [P('usage','Infrastructure Usage','metrics'),P('dbPerf','Database Performance','line'),P('incidents','Recent Incidents','table')],
+ [P('projects','Technology Projects','list'),P('security','Security & Access','metrics'),P('integrations','Integrations Status','list')],
+ [P('team','Tech Team Activity','list'),P('insights','AI Insights','list')]]}}
+
+export const slug=(s:string)=>s.toLowerCase().replace(/&/g,'and').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')
+export const TABMAP:Record<string,Record<string,string[]>>={
+ ceo:{Financial:['revenue','startup'],Customers:['growth','ticketStatus'],Operations:['ticketStatus','cities'],'Sales & Marketing':['pipeline','messages'],People:['approvals','activities'],'AI Insights':['insights']},
+ coo:{'Service Operations':['ticketStatus','ticketTrend','ongoing'],'Fleet & Vehicles':['fleetStatus','renewals'],Technicians:['workload','tasks'],'Inventory & Procurement':['inventory','procurement'],'Service Centers':['centers'],'Team & Tasks':['tasks','activity'],Reports:[]},
+ cto:{'System Health':['health','apiLatency','services'],Infrastructure:['usage','dbPerf'],Integrations:['integrations'],Projects:['projects'],'R&D & AI':['insights'],'Tech Team':['team'],Security:['security','incidents'],Reports:[]}}
+export const COLS:Record<string,string[]>={renewals:['Vehicle','Renewal type','Due date','Status'],inventory:['Part','Stock','Status'],centers:['Location','Tickets','Completed','SLA','Status'],procurement:['Item','Requester','Amount','Status'],ongoing:['Ticket','Vehicle','Priority','Status'],services:['Service','Status','Uptime'],incidents:['Incident','Status','Time']}
+export const METRICS:Record<string,string[]>={startup:['Burn Rate','Cash Runway','CAC','LTV','LTV/CAC','Monthly Growth','Churn Rate','NPS','Repeat Service Rate'],health:['APIs','Database','Frontend','Mobile App'],usage:['CPU','Memory','Storage','Network'],security:['Critical Alerts','Failed Logins','Permission Changes','Active Users']}
+export const FUNNEL=['New Lead','Contacted','Proposal Sent','Negotiation','Won']
+export const NEEDS_MONITORING=['health','apiLatency','services','usage','dbPerf','incidents']
+export const KPI_SOURCE:Record<string,string>={'System Uptime':'monitoring','API Health':'monitoring','Infrastructure Cost':'billing'}
+export const PORTAL_NAMES:Record<string,string>={ceo:'CEO',coo:'COO',cto:'CTO',service_manager:'Service Manager',hr:'HR',technician:'Technician',employee:'Employee'}

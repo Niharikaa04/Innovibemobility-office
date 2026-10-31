@@ -1,0 +1,9 @@
+*.sqlite3
+audit.jsonl
+.env
+__pycache__/
+*.pyc
+node_modules/
+dist/
+.venv/
+sessions.sqlite3

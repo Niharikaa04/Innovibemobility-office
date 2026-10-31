@@ -1,0 +1,20 @@
+--- a/frontend/src/Dashboard.tsx
++++ b/frontend/src/Dashboard.tsx
+@@ -1,5 +1,5 @@
+ import {useEffect,useState} from 'react'; import {useParams} from 'react-router-dom'
+-import {api,DashData,User} from './api'; import {NAV,LAYOUT,TABMAP,slug,NEEDS_MONITORING,KPI_SOURCE,PORTAL_NAMES,Panel} from './nav'; import {Chart,Empty} from './Charts'; import Shell from './Shell'; import Crm from './Crm'; import Tasks from './Tasks'; import Attendance from './Attendance'; import Leave from './Leave'; import {Employees,AuditLog} from './People'; import Workspace from './Workspace'; import Tickets from './Tickets'; import Fleet from './Fleet'
++import {api,DashData,User} from './api'; import {NAV,LAYOUT,TABMAP,slug,NEEDS_MONITORING,KPI_SOURCE,PORTAL_NAMES,Panel} from './nav'; import {Chart,Empty} from './Charts'; import Shell from './Shell'; import Crm from './Crm'; import Tasks from './Tasks'; import Attendance from './Attendance'; import Leave from './Leave'; import {Employees,AuditLog} from './People'; import Workspace from './Workspace'; import Tickets from './Tickets'; import Fleet from './Fleet'; import Garages from './Garages'; import Technicians from './Technicians'; import Diagnostics from './Diagnostics'; import Iot from './Iot'
+ // Sidebar pages that have a real backend. Everything else shows an honest 'not implemented' state.
+ const TASKS=['tasks-and-approvals','my-tasks','tasks'],EMPLOYEES=['employees','employee-directory','team-management'],AUDIT=['audit-log','logs-and-audit'],ATTENDANCE=['attendance'],LEAVE=['hr-and-leave','leave','leave-requests']
+ function csv(L:any,d:DashData|null){const q=(v:any)=>'"'+String(v??'').replace(/"/g,'""')+'"';const rows=[['Section','Item','Value']]
+@@ -20,6 +20,10 @@
+  else if(sl&&LEAVE.includes(sl))body=<Leave key={sl}/>
+  else if(sl==='service-tickets'||sl==='ticket-queue'||sl==='service-platform')body=<Tickets key={sl}/>
+  else if(sl==='fleet-management'||sl==='vehicle-directory')body=<Fleet key={sl}/>
++  else if(sl==='garages-and-service-centers')body=<Garages key={sl}/>
++  else if(sl==='technicians')body=<Technicians key={sl}/>
++  else if(sl==='evcare-ai-diagnostics'||sl==='evcare-ai')body=<Diagnostics key={sl}/>
++  else if(sl==='iot-and-telemetry')body=<Iot key={sl}/>
+  else if(!sl&&!L&&NAV[portal]&&TASKS.includes(slug(NAV[portal][0][1][0])))body=<Tasks key="home"/>   // portals whose FIRST sidebar item is a tasks page (employee: My Tasks) link to the portal home
+  else if(sl)body=mod?<Workspace key={sl} title={mod}/>:<div className="panel"><h3>Page not found</h3><Empty msg="That page does not exist in this portal."/></div>
+  else if(!L)body=<div className="panel"><h3>{PORTAL_NAMES[portal]} workspace</h3><Empty msg="Pick a page from the menu. Its data modules are not implemented yet."/></div>

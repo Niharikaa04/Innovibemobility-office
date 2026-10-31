@@ -1,0 +1,27 @@
+import type { Context, MetricResult, Overview, PeriodKind, Status, Trends } from './types'
+
+/** Error that keeps the HTTP status so the UI can tell "no permission" from "unavailable" from "slow down". */
+export class IntelError extends Error {
+  status: number
+  constructor(status: number, message: string) { super(message); this.status = status }
+}
+
+async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
+  let r: Response
+  try { r = await fetch('/api/intelligence' + path, { credentials: 'include', signal, headers: { Accept: 'application/json' } }) }
+  catch (e) { if ((e as Error).name === 'AbortError') throw e; throw new IntelError(0, 'The server could not be reached.') }
+  if (!r.ok) {
+    const b = await r.json().catch(() => ({}))
+    throw new IntelError(r.status, typeof b.detail === 'string' ? b.detail : r.status === 422 ? 'That period is not valid.' : `Request failed (${r.status}).`)
+  }
+  return r.json()
+}
+
+const q = (period: PeriodKind) => `?period=${encodeURIComponent(period)}`
+export const intel = {
+  status: (s?: AbortSignal) => get<Status>('/status', s),
+  overview: (p: PeriodKind, s?: AbortSignal) => get<Overview>('/overview' + q(p), s),
+  trends: (p: PeriodKind, s?: AbortSignal) => get<Trends>('/trends' + q(p), s),
+  context: (p: PeriodKind, s?: AbortSignal) => get<Context>('/context' + q(p), s),
+  metric: (id: string, p: PeriodKind, s?: AbortSignal) => get<{ metric: MetricResult }>(`/metrics/${encodeURIComponent(id)}` + q(p), s).then(r => r.metric),
+}
